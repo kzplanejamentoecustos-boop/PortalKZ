@@ -115,33 +115,24 @@ service cloud.firestore {
       }
     }
 
-    // ---------- Piloto anterior: Controle de Efetivo (até migrar para obras/wsf3/efetivo) ----------
-    function logadoComAcesso(app) {
-      return logado() && get(/databases/$(database)/documents/acessos/$(eu())).data.get(app, '') in ['leitor', 'editor', 'admin'];
+    // ---------- Coleções ANTIGAS já migradas para obras/{obra}/... ----------
+    // Fechadas para os apps antigos (cache ou cópia salva do HTML). Só gestor geral lê (backup/migração).
+    function colecoesMigradas() {
+      return [
+        'Controle de Efetivo',
+        'ctc_faturamento_direto_versoes', 'ctc_faturamento_direto_versoes_conteudo',
+        'Controle de Faturamento Direto'
+      ];
     }
-    function acessoApp(app) {
-      return get(/databases/$(database)/documents/acessos/$(eu())).data.get(app, '');
-    }
-    match /acessos/{uid} {
-      allow read: if logado() && eu() == uid;
-      allow write: if false;
-    }
-    match /{colecao}/{docId} {
-      allow read:   if colecao == 'Controle de Efetivo' && logadoComAcesso('efetivo');
-      allow create: if colecao == 'Controle de Efetivo' && logado() && acessoApp('efetivo') in ['editor', 'admin']
-                    && novo().get('createdBy', '') == request.auth.token.email;
-      allow update: if colecao == 'Controle de Efetivo' && logado() && acessoApp('efetivo') in ['editor', 'admin']
-                    && novo().get('updatedBy', '') == request.auth.token.email;
-      allow delete: if colecao == 'Controle de Efetivo' && logado() && acessoApp('efetivo') == 'admin';
+    match /{colecao}/{caminho=**} {
+      allow read: if colecao in colecoesMigradas() && ehGestorGeral();
     }
 
     // ---------- TEMPORÁRIO: apps antigos ainda sem login ----------
     // Cada app migrado sai daqui. Quando todos migrarem, apague este bloco.
     match /{colecao}/{caminho=**} {
-      allow read, write: if !(colecao in [
-        'acessos', 'Controle de Efetivo',
-        'gestores_gerais', 'usuarios', 'usuarios_email', 'obras'
-      ]);
+      allow read, write: if !(colecao in colecoesMigradas())
+        && !(colecao in ['acessos', 'gestores_gerais', 'usuarios', 'usuarios_email', 'obras']);
     }
   }
 }
