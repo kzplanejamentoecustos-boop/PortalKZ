@@ -433,6 +433,10 @@ function abrirCadastroPessoa(obra, aoSalvar, emailInicial = '') {
           abrirContaSemCadastro(v.email, v.nome);
           return;
         }
+        if (erro.code === 'auth/admin-restricted-operation') {
+          formulario.definirErro('email', 'O Firebase está com a criação de contas desligada. Um gestor geral precisa ligar em Firebase > Authentication > Configurações > Ações do usuário > "Ativar criação (inscrição)". Depois, clique em Cadastrar de novo.');
+          return;
+        }
         formulario.definirErro('email', erro.message);
         return;
       }
