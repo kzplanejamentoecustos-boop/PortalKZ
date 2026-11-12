@@ -258,6 +258,38 @@ export const buscarUsuarioPorEmail = (email) => executar(async ({ db, fs }) => {
   return d.exists() ? { ...d.data(), email: limpo } : null;
 });
 
+/** Quantos documentos ha numa colecao (caminho em partes: ['obras', 'wsf3', 'efetivo']). */
+export const contarDocumentos = (partes) => executar(async ({ db, fs }) =>
+  (await fs.getCountFromServer(fs.collection(db, ...partes))).data().count);
+
+/**
+ * Copia uma colecao antiga (formato de antes do Portal) para obras/{obra}/{controle}.
+ * - A colecao antiga NAO e alterada (fica como backup).
+ * - Documento que ja existe no destino e foi atualizado DEPOIS da origem nao e sobrescrito.
+ * Retorna { total, copiados, ignorados }.
+ */
+export function migrarColecao({ origem, obra, controle, onProgresso }) {
+  return executar(async ({ db, fs }) => {
+    const snap = await fs.getDocs(fs.collection(db, origem));
+    const dataDe = (d) => String(d.updatedAt || d.atualizadoEm || d.salvoEmISO || d.createdAt || '');
+    let copiados = 0;
+    let ignorados = 0;
+    for (const doc of snap.docs) {
+      const destino = fs.doc(db, 'obras', obra, controle, doc.id);
+      const dados = doc.data();
+      const atual = await fs.getDoc(destino);
+      if (atual.exists() && dataDe(atual.data()) > dataDe(dados)) {
+        ignorados += 1;
+      } else {
+        await fs.setDoc(destino, { ...dados, _migradoDe: origem, _migradoEm: new Date().toISOString() });
+        copiados += 1;
+      }
+      if (typeof onProgresso === 'function') onProgresso(copiados + ignorados, snap.size);
+    }
+    return { total: snap.size, copiados, ignorados };
+  });
+}
+
 /** Todos os cadastros (somente gestor geral). */
 export const listarUsuarios = () => executar(async ({ db, fs }) =>
   (await fs.getDocs(fs.collection(db, 'usuarios'))).docs.map((d) => ({ uid: d.id, ...d.data() })));

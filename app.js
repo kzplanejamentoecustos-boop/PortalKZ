@@ -36,6 +36,7 @@ import {
   criarTelaLogin, criarTelaAguardando, abrirPainelSessao,
   PAPEIS, papelNoControle, codigoObra, criarObra, atualizarObra,
   listarMembros, salvarMembro, removerMembro, buscarUsuarioPorEmail, listarUsuarios,
+  contarDocumentos, migrarColecao,
 } from './compartilhado/acesso-kz.js';
 
 
@@ -71,7 +72,16 @@ const CONTROLES_BASICOS = {
   'relatorio-bexup': { nome: 'Relatório BEXUP', url: `${ENDERECO}RELATORIOBEXUP/` },
 };
 
-const VARIANTE_PAPEL = { admin: 'solid', editor: 'info', leitor: 'neutral' };
+/**
+ * Migracao dos dados de antes do Portal (todos eram da WSF3).
+ * Cada controle entra aqui quando o aplicativo dele passa a ler obras/{obra}/{controle}.
+ */
+const OBRA_MIGRACAO = 'wsf3';
+const MIGRACOES = [
+  { controle: 'efetivo', nome: 'Controle de Efetivo', origem: 'Controle de Efetivo' },
+];
+
+const VARIANTE_PAPEL ={ admin: 'solid', editor: 'info', leitor: 'neutral' };
 const CHAVE_OBRA = 'kz-portal-obra';
 
 
@@ -711,6 +721,75 @@ function paginaUsuarios() {
 
 
 /* =============================================================================
+   08b. PAGINA: MIGRACAO DOS DADOS ANTIGOS (gestor geral)
+   ========================================================================== */
+
+function paginaMigracao() {
+  if (!perfil.gestorGeral) return [criarAlerta({ tipo: 'warning', mensagem: 'Somente gestores gerais acessam esta página.' })];
+  const obra = perfil.obras.find((o) => o.id === OBRA_MIGRACAO);
+  if (!obra) {
+    return [criarAlerta({ tipo: 'warning', titulo: `Obra "${OBRA_MIGRACAO.toUpperCase()}" não encontrada`, mensagem: 'Crie a obra com a sigla WSF3 em Gestão geral > Obras antes de migrar.' })];
+  }
+
+  const painel = painelAssincrono({ titulo: `Dados antigos → ${obra.sigla}`, icone: 'upload', semEspaco: true }, async () => {
+    const linhas = await Promise.all(MIGRACOES.map(async (m) => {
+      const [antigos, naObra] = await Promise.all([
+        contarDocumentos([m.origem]).catch((erro) => `erro: ${erro.message}`),
+        contarDocumentos(['obras', obra.id, m.controle]).catch((erro) => `erro: ${erro.message}`),
+      ]);
+      return { ...m, antigos, naObra };
+    }));
+    return criarTabela({
+      dados: linhas,
+      altura: 'auto',
+      compacta: true,
+      colunas: [
+        { campo: 'nome', titulo: 'Controle' },
+        { campo: 'origem', titulo: 'Coleção antiga', classe: 'ctc-mono' },
+        { campo: 'antigos', titulo: 'Documentos antigos' },
+        { campo: 'naObra', titulo: `Documentos na ${obra.sigla}` },
+        {
+          campo: 'acoes', titulo: '', ordenavel: false, classe: 'ctc-col--actions',
+          render: (_, m) => {
+            const botao = criarBotao({ texto: 'Migrar', icone: 'upload', variante: 'primary', tamanho: 'sm' });
+            botao.addEventListener('click', async () => {
+              const ok = await confirmar({
+                titulo: `Migrar ${m.nome} para ${obra.sigla}?`,
+                mensagem: `Copia os documentos de "${m.origem}" para a obra ${obra.sigla}. A coleção antiga não é alterada. Documentos que já foram editados na obra depois da cópia não são sobrescritos.`,
+                textoConfirmar: 'Migrar',
+              });
+              if (!ok) return;
+              botao.disabled = true;
+              try {
+                const r = await migrarColecao({
+                  origem: m.origem, obra: obra.id, controle: m.controle,
+                  onProgresso: (feitos, total) => { botao.textContent = `${feitos}/${total}…`; },
+                });
+                toast.sucesso('Migração concluída', `${m.nome}: ${r.copiados} copiado(s), ${r.ignorados} mantido(s) (já mais novos na obra), de ${r.total}.`);
+              } catch (erro) {
+                toast.erro('Migração interrompida', erro.message);
+              }
+              app.navegar('migracao');
+            });
+            return botao;
+          },
+        },
+      ],
+    }).elemento;
+  });
+
+  return [
+    criarAlerta({
+      tipo: 'info',
+      titulo: 'Como funciona',
+      mensagem: 'Os dados de antes do Portal eram todos da WSF3. Aqui eles são copiados para dentro da obra, controle por controle, conforme cada aplicativo é adaptado. Pode rodar de novo sem duplicar. As coleções antigas ficam intactas como backup até você conferir.',
+    }),
+    painel.elemento,
+  ];
+}
+
+
+/* =============================================================================
    09. MONTAGEM DO APLICATIVO
    ========================================================================== */
 
@@ -762,6 +841,7 @@ function montarPortal(paginaInicial = 'inicio') {
       itens: [
         { id: 'obras', texto: 'Obras', icone: 'configuracao' },
         { id: 'usuarios', texto: 'Usuários', icone: 'usuario' },
+        { id: 'migracao', texto: 'Migração de dados', icone: 'upload' },
       ],
     } : null,
   ].filter(Boolean);
@@ -786,6 +866,7 @@ function montarPortal(paginaInicial = 'inicio') {
       acoes: perfil.gestorGeral ? [{ texto: 'Nova obra', icone: 'mais', variante: 'primary', onClick: abrirNovaObra }] : [],
     },
     usuarios: { titulo: 'Usuários', caminho: ['Gestão geral'], render: paginaUsuarios },
+    migracao: { titulo: 'Migração de dados', caminho: ['Gestão geral'], render: paginaMigracao },
   };
 
   const botaoSessao = criarBotao({
