@@ -26,7 +26,7 @@
 
 import {
   h, montarAplicativo, criarPainel, criarKpi, criarBadge, criarAlerta, criarCard,
-  criarTabela, criarFormulario, criarModal, confirmar, solicitarValor, criarBotao, toast,
+  criarTabela, criarFormulario, criarModal, confirmar, solicitarValor, criarBotao, toast, notificar,
 } from './compartilhado/componentes.js';
 
 import { formatarData, ordenar } from './compartilhado/funcionalidades.js';
@@ -36,7 +36,7 @@ import {
   criarTelaLogin, criarTelaAguardando, abrirPainelSessao,
   PAPEIS, papelNoControle, codigoObra, criarObra, atualizarObra,
   listarMembros, salvarMembro, removerMembro, buscarUsuarioPorEmail, listarUsuarios,
-  contarDocumentos, migrarColecao,
+  contarDocumentos, migrarColecao, cadastrarPessoa, enviarEmailDeSenha,
 } from './compartilhado/acesso-kz.js';
 
 
@@ -57,6 +57,7 @@ const FIREBASE = {
 const MARCA = { logo: 'KZ', titulo: 'Portal KZ Planejamento' };
 const RODAPE = 'KZ App Standard v1.7 — acesso controlado pelo Firebase (login e regras por obra).';
 const ENDERECO = 'https://kzplanejamentoecustos-boop.github.io/';
+const PORTAL_URL = `${ENDERECO}PortalKZ/`;
 
 /** Controles basicos que toda obra nova recebe (o gestor pode desativar ou incluir proprios). */
 const CONTROLES_BASICOS = {
@@ -359,6 +360,80 @@ function abrirEditorMembro(obra, membro, aoSalvar) {
   modal.abrir();
 }
 
+/**
+ * Cadastra uma pessoa nova pelo Portal (sem ela precisar clicar em "Criar conta")
+ * e em seguida abre o acesso dela na obra.
+ */
+function abrirCadastroPessoa(obra, aoSalvar, emailInicial = '') {
+  const formulario = criarFormulario({
+    colunas: 1,
+    semBotoes: true,
+    valores: { email: emailInicial, modo: 'email' },
+    campos: [
+      { nome: 'nome', rotulo: 'Nome completo', obrigatorio: true, regras: { minCaracteres: 3, maxCaracteres: 80 } },
+      { nome: 'email', rotulo: 'E-mail', tipo: 'email', obrigatorio: true },
+      {
+        nome: 'modo', rotulo: 'Senha', tipo: 'radio', obrigatorio: true,
+        opcoes: [
+          { valor: 'email', texto: 'Enviar e-mail para a pessoa criar a senha (recomendado)' },
+          { valor: 'provisoria', texto: 'Definir uma senha provisória' },
+        ],
+      },
+      {
+        nome: 'senha', rotulo: 'Senha provisória (se escolheu essa opção)', tipo: 'senha',
+        dica: 'Mínimo 8 caracteres. Passe para a pessoa e peça para trocar no primeiro acesso.',
+        regras: { validar: (v, valores) => (valores.modo !== 'provisoria' || String(v || '').length >= 8 ? true : 'Informe ao menos 8 caracteres.') },
+        atributos: { autocomplete: 'new-password' },
+      },
+    ],
+    onEnviar: async (v) => {
+      let pessoa;
+      try {
+        pessoa = await cadastrarPessoa({ nome: v.nome, email: v.email, senha: v.modo === 'provisoria' ? v.senha : null });
+      } catch (erro) {
+        const msg = /Já existe uma conta/i.test(erro.message)
+          ? 'Já existe uma conta com este e-mail, mas ela ainda não entrou no Portal. Peça para a pessoa entrar uma vez no Portal KZ, ou use "Adicionar pessoa" depois.'
+          : erro.message;
+        formulario.definirErro('email', msg);
+        return;
+      }
+      modal.fechar();
+      if (pessoa.jaExistia) {
+        toast.info('Esta pessoa já tem conta', `${pessoa.nome} — defina o acesso dela na ${obra.sigla}.`);
+      } else if (v.modo === 'email') {
+        try {
+          const r = await enviarEmailDeSenha(pessoa.email, PORTAL_URL);
+          notificar({
+            tipo: 'success', duracao: 0,
+            titulo: `Conta criada: ${pessoa.nome}`,
+            mensagem: r.comRetorno
+              ? `Enviamos para ${pessoa.email} um e-mail para criar a senha; depois o link leva direto ao Portal KZ. Peça para olhar também o spam.`
+              : `Enviamos para ${pessoa.email} um e-mail para criar a senha (veja também o spam). Depois, ela entra pelo Portal KZ.`,
+          });
+        } catch (erro) {
+          toast.aviso('Conta criada, mas o e-mail não foi enviado', `${erro.message} Use "Esqueci a senha" no login ou defina uma senha provisória.`);
+        }
+      } else {
+        notificar({ tipo: 'success', duracao: 0, titulo: `Conta criada: ${pessoa.nome}`, mensagem: `Passe para a pessoa o e-mail ${pessoa.email}, a senha provisória e o endereço do Portal KZ. Ela pode trocar a senha no botão com o nome dela.` });
+      }
+      abrirEditorMembro(obra, { uid: pessoa.uid, nome: pessoa.nome, email: pessoa.email, papeis: {} }, aoSalvar);
+    },
+  });
+  const modal = criarModal({
+    titulo: `Cadastrar pessoa nova — ${obra.sigla}`,
+    destruirAoFechar: true,
+    conteudo: [
+      criarAlerta({ tipo: 'info', mensagem: 'A conta é criada agora e, em seguida, você define o acesso dela nesta obra. Você continua logado com a sua conta.' }),
+      formulario.elemento,
+    ],
+    acoes: [
+      { texto: 'Cancelar', variante: 'outline' },
+      { texto: 'Cadastrar', variante: 'primary', fechar: false, onClick: () => formulario.enviar() },
+    ],
+  });
+  modal.abrir();
+}
+
 async function adicionarPessoa(obra, aoSalvar, emailInicial = '') {
   const email = await solicitarValor({ titulo: 'Adicionar pessoa à obra', rotulo: 'E-mail da pessoa', tipo: 'email', valor: emailInicial, obrigatorio: true, textoConfirmar: 'Procurar' });
   if (!email) return;
@@ -369,8 +444,11 @@ async function adicionarPessoa(obra, aoSalvar, emailInicial = '') {
         titulo: 'Conta não encontrada',
         tamanho: 'sm',
         destruirAoFechar: true,
-        conteudo: h('p', {}, `Não há conta para ${email}. Peça à pessoa para abrir o Portal KZ e clicar em "Criar conta"; depois adicione de novo.`),
-        acoes: [{ texto: 'Entendi', variante: 'primary' }],
+        conteudo: h('p', {}, `Não há conta para ${email}. Você pode cadastrar a pessoa agora.`),
+        acoes: [
+          { texto: 'Cancelar', variante: 'outline' },
+          { texto: 'Cadastrar agora', variante: 'primary', onClick: () => abrirCadastroPessoa(obra, aoSalvar, email) },
+        ],
       }).abrir();
       return;
     }
@@ -853,7 +931,10 @@ function montarPortal(paginaInicial = 'inicio') {
     controles: { titulo: 'Controles', caminho: caminhoObra, render: paginaControles },
     equipe: {
       titulo: 'Equipe da obra', caminho: caminhoObra, render: paginaEquipe,
-      acoes: gestorObra ? [{ texto: 'Adicionar pessoa', icone: 'mais', variante: 'primary', onClick: () => adicionarPessoa(obra, () => app.navegar('equipe')) }] : [],
+      acoes: gestorObra ? [
+        { texto: 'Adicionar pessoa (já tem conta)', icone: 'usuario', variante: 'outline', onClick: () => adicionarPessoa(obra, () => app.navegar('equipe')) },
+        { texto: 'Cadastrar pessoa nova', icone: 'mais', variante: 'primary', onClick: () => abrirCadastroPessoa(obra, () => app.navegar('equipe')) },
+      ] : [],
     },
     'config-controles': {
       titulo: 'Controles da obra', caminho: caminhoObra, render: paginaConfigControles,

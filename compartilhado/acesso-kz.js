@@ -34,6 +34,7 @@ import { VERSAO_SDK_FIREBASE } from './funcionalidades.js';
    ========================================================================== */
 
 let pronto = null;
+let configFirebase = null;
 
 /**
  * Inicia o Firebase (app padrao: o login fica compartilhado entre todos os
@@ -41,6 +42,7 @@ let pronto = null;
  */
 export function iniciarFirebase(config) {
   if (!pronto) {
+    configFirebase = config;
     pronto = (async () => {
       const endereco = `https://www.gstatic.com/firebasejs/${VERSAO_SDK_FIREBASE}`;
       const [moduloApp, fa, fs] = await Promise.all([
@@ -125,6 +127,69 @@ export function criarConta({ nome, email, senha }) {
     await fs.setDoc(fs.doc(db, 'usuarios_email', u.email), { uid: u.uid, nome: nomeLimpo });
     return u;
   });
+}
+
+/** Senha aleatoria forte (usada quando a pessoa vai criar a propria senha pelo e-mail). */
+function senhaAleatoria() {
+  const letras = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%';
+  const bytes = crypto.getRandomValues(new Uint8Array(24));
+  return Array.from(bytes, (b) => letras[b % letras.length]).join('');
+}
+
+/**
+ * Cadastra OUTRA pessoa pelo Portal, sem trocar o login de quem esta cadastrando.
+ * Usa uma segunda instancia do Firebase so em memoria: a conta nova grava o proprio
+ * cadastro (como as regras exigem) e a sessao temporaria e encerrada em seguida.
+ *   cadastrarPessoa({ nome, email, senha })  // sem senha: gera uma aleatoria
+ * Retorna { uid, nome, email, jaExistia }.
+ */
+export function cadastrarPessoa({ nome, email, senha }) {
+  return executar(async ({ db, fs }) => {
+    const nomeLimpo = String(nome).trim();
+    const emailLimpo = String(email).trim().toLowerCase();
+    const existente = await fs.getDoc(fs.doc(db, 'usuarios_email', emailLimpo));
+    if (existente.exists()) return { ...existente.data(), email: emailLimpo, jaExistia: true };
+
+    const endereco = `https://www.gstatic.com/firebasejs/${VERSAO_SDK_FIREBASE}`;
+    const [moduloApp, fa2, fs2] = await Promise.all([
+      import(`${endereco}/firebase-app.js`),
+      import(`${endereco}/firebase-auth.js`),
+      import(`${endereco}/firebase-firestore.js`),
+    ]);
+    const nomeApp = `kz-cadastro-${Date.now()}`;
+    const app2 = moduloApp.initializeApp(configFirebase, nomeApp);
+    try {
+      const auth2 = fa2.initializeAuth(app2, { persistence: fa2.inMemoryPersistence });
+      const cred = await fa2.createUserWithEmailAndPassword(auth2, emailLimpo, senha || senhaAleatoria());
+      await fa2.updateProfile(cred.user, { displayName: nomeLimpo });
+      const db2 = fs2.getFirestore(app2);
+      await fs2.setDoc(fs2.doc(db2, 'usuarios', cred.user.uid), { nome: nomeLimpo, email: cred.user.email, criadoEm: new Date().toISOString() });
+      await fs2.setDoc(fs2.doc(db2, 'usuarios_email', cred.user.email), { uid: cred.user.uid, nome: nomeLimpo });
+      await fa2.signOut(auth2);
+      return { uid: cred.user.uid, nome: nomeLimpo, email: cred.user.email, jaExistia: false };
+    } finally {
+      moduloApp.deleteApp(app2).catch(() => {});
+    }
+  });
+}
+
+/**
+ * E-mail para a pessoa criar (ou trocar) a senha. Depois de criar, o link leva ao Portal.
+ * Se o dominio do Portal ainda nao estiver autorizado no Firebase, envia sem o link de retorno.
+ */
+export async function enviarEmailDeSenha(email, urlRetorno) {
+  const { auth, fa } = await sdk();
+  const destino = String(email).trim();
+  try {
+    await fa.sendPasswordResetEmail(auth, destino, urlRetorno ? { url: urlRetorno } : undefined);
+    return { comRetorno: Boolean(urlRetorno) };
+  } catch (erro) {
+    if (urlRetorno && /unauthorized-continue-uri|invalid-continue-uri|domain/i.test(erro.code || erro.message)) {
+      await fa.sendPasswordResetEmail(auth, destino);
+      return { comRetorno: false };
+    }
+    throw new Error(traduzirErroAcesso(erro));
+  }
 }
 
 /** Troca a senha de quem esta logado (confirma a senha atual antes). */
