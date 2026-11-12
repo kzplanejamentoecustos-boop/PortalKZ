@@ -1,0 +1,437 @@
+/* =============================================================================
+   KZ App Standard — compartilhado/acesso-kz.js
+   Versao: 1.7.0  (modulo novo da v1.7: login real no Firebase)
+
+   Substitui, nos aplicativos KZ, a senha mestre e os perfis gravados no JSON
+   por LOGIN DO FIREBASE (e-mail e senha) e PERMISSOES POR OBRA E CONTROLE,
+   garantidas pelas regras do Firestore (ver firestore.rules do Portal KZ).
+
+   Estrutura no Firestore:
+     gestores_gerais/{uid}                         gestores gerais (console)
+     usuarios/{uid}          { nome, email }       criado pela propria pessoa
+     usuarios_email/{email}  { uid, nome }         busca por e-mail
+     obras/{obra}            { nome, sigla, situacao, controles: { id: { nome, url, basico } } }
+     obras/{obra}/membros/{uid}  { uid, nome, email, gestor, papeis: { '*'|controle: 'leitor'|'editor'|'admin' } }
+     obras/{obra}/{controle}/... dados de cada controle
+
+   ESTRUTURA
+   01. Firebase (carregado sob demanda do gstatic)
+   02. Login, conta e senha
+   03. Perfil do usuario: gestor geral, obras e papeis
+   04. Gestao: obras, membros e usuarios
+   05. Telas: login, aguardando liberacao, painel da sessao
+   ========================================================================== */
+
+import {
+  h, criarBotao, criarFormulario, criarModal, criarAlerta, criarAbas, conteudoLogo,
+  solicitarValor, comCarregamento, toast,
+} from './componentes.js';
+import { VERSAO_SDK_FIREBASE } from './funcionalidades.js';
+
+
+/* =============================================================================
+   01. FIREBASE
+   ========================================================================== */
+
+let pronto = null;
+
+/**
+ * Inicia o Firebase (app padrao: o login fica compartilhado entre todos os
+ * aplicativos KZ abertos no mesmo endereco). Retorna { auth, db, fa, fs }.
+ */
+export function iniciarFirebase(config) {
+  if (!pronto) {
+    pronto = (async () => {
+      const endereco = `https://www.gstatic.com/firebasejs/${VERSAO_SDK_FIREBASE}`;
+      const [moduloApp, fa, fs] = await Promise.all([
+        import(`${endereco}/firebase-app.js`),
+        import(`${endereco}/firebase-auth.js`),
+        import(`${endereco}/firebase-firestore.js`),
+      ]);
+      const app = moduloApp.getApps().length ? moduloApp.getApp() : moduloApp.initializeApp(config);
+      return { auth: fa.getAuth(app), db: fs.getFirestore(app), fa, fs };
+    })().catch((erro) => { pronto = null; throw new Error(traduzirErroAcesso(erro)); });
+  }
+  return pronto;
+}
+
+async function sdk() {
+  if (!pronto) throw new Error('Firebase não iniciado: chame iniciarFirebase(config) antes.');
+  return pronto;
+}
+
+/** Mensagens em portugues para os erros do Firebase. */
+export function traduzirErroAcesso(erro) {
+  const codigo = (erro && (erro.code || erro.message)) || String(erro);
+  const mapa = {
+    'auth/invalid-credential': 'E-mail ou senha incorretos.',
+    'auth/wrong-password': 'Senha atual incorreta.',
+    'auth/invalid-email': 'E-mail inválido.',
+    'auth/user-disabled': 'Usuário desativado. Fale com o gestor.',
+    'auth/too-many-requests': 'Muitas tentativas. Aguarde alguns minutos ou redefina a senha.',
+    'auth/network-request-failed': 'Sem conexão com a internet.',
+    'auth/email-already-in-use': 'Já existe uma conta com este e-mail. Use "Entrar" ou "Esqueci a senha".',
+    'auth/weak-password': 'Senha fraca: use pelo menos 8 caracteres.',
+    'auth/admin-restricted-operation': 'O cadastro de novas contas está desativado. Peça ao gestor para criar o seu acesso.',
+    'auth/operation-not-allowed': 'Login por e-mail e senha não está ativado no Firebase.',
+    'auth/requires-recent-login': 'Por segurança, saia e entre de novo antes de trocar a senha.',
+    'permission-denied': 'Você não tem permissão para esta ação.',
+    unavailable: 'O Firebase não respondeu. Verifique a internet.',
+  };
+  if (mapa[codigo]) return mapa[codigo];
+  if (/permission/i.test(codigo)) return mapa['permission-denied'];
+  if (/importing|dynamically imported module|Failed to load module/i.test(codigo)) return 'Não foi possível carregar o Firebase. Verifique a internet ou se o acesso a gstatic.com está liberado.';
+  return codigo;
+}
+
+async function executar(operacao) {
+  try { return await operacao(await sdk()); }
+  catch (erro) { throw new Error(traduzirErroAcesso(erro)); }
+}
+
+
+/* =============================================================================
+   02. LOGIN, CONTA E SENHA
+   ========================================================================== */
+
+/** Chama onMudar(usuario | null) a cada entrada/saida. Ignora sessoes anonimas antigas. */
+export async function observarLogin(onMudar) {
+  const { auth, fa } = await sdk();
+  return fa.onAuthStateChanged(auth, (usuario) => {
+    if (usuario && usuario.isAnonymous) { fa.signOut(auth); return; }
+    onMudar(usuario || null);
+  });
+}
+
+export const entrar = (email, senha) => executar(({ auth, fa }) =>
+  fa.signInWithEmailAndPassword(auth, String(email).trim(), senha));
+
+export const sair = () => executar(({ auth, fa }) => fa.signOut(auth));
+
+/** Envia o e-mail de redefinicao. Nao revela se o e-mail existe. */
+export async function redefinirSenha(email) {
+  try { await executar(({ auth, fa }) => fa.sendPasswordResetEmail(auth, String(email).trim())); }
+  catch (erro) { if (/inválido|internet/i.test(erro.message)) throw erro; }
+}
+
+/** Cria a conta e o cadastro (usuarios + usuarios_email). A pessoa fica aguardando liberacao. */
+export function criarConta({ nome, email, senha }) {
+  return executar(async ({ auth, db, fa, fs }) => {
+    const cred = await fa.createUserWithEmailAndPassword(auth, String(email).trim(), senha);
+    const u = cred.user;
+    const nomeLimpo = String(nome).trim();
+    await fa.updateProfile(u, { displayName: nomeLimpo });
+    await fs.setDoc(fs.doc(db, 'usuarios', u.uid), { nome: nomeLimpo, email: u.email, criadoEm: new Date().toISOString() });
+    await fs.setDoc(fs.doc(db, 'usuarios_email', u.email), { uid: u.uid, nome: nomeLimpo });
+    return u;
+  });
+}
+
+/** Troca a senha de quem esta logado (confirma a senha atual antes). */
+export function trocarSenha(senhaAtual, novaSenha) {
+  return executar(async ({ auth, fa }) => {
+    const u = auth.currentUser;
+    await fa.reauthenticateWithCredential(u, fa.EmailAuthProvider.credential(u.email, senhaAtual));
+    await fa.updatePassword(u, novaSenha);
+  });
+}
+
+
+/* =============================================================================
+   03. PERFIL DO USUARIO
+   ========================================================================== */
+
+export const PAPEIS = { leitor: 'Leitor', editor: 'Editor', admin: 'Admin' };
+const NIVEL = { '': 0, leitor: 1, editor: 2, admin: 3 };
+
+/**
+ * Papel efetivo de um membro em um controle ('' = sem acesso). Gestor = admin de tudo.
+ * papeis[controle] = 'nenhum' bloqueia um controle mesmo quando '*' libera os demais.
+ */
+export function papelNoControle(membro, controle) {
+  if (!membro) return '';
+  if (membro.gestor) return 'admin';
+  const papeis = membro.papeis || {};
+  const papel = papeis[controle] || papeis['*'] || '';
+  return PAPEIS[papel] ? papel : '';
+}
+export const podeEditarPapel = (papel) => NIVEL[papel] >= NIVEL.editor;
+
+/**
+ * Carrega quem e o usuario e o que ele acessa:
+ * { uid, email, nome, gestorGeral, obras: [{ id, nome, sigla, situacao, controles, membro }] }
+ * Para o gestor geral, todas as obras aparecem como gestor.
+ */
+export function carregarPerfil(usuario) {
+  return executar(async ({ db, fs }) => {
+    const [gg, cadastro, obrasSnap] = await Promise.all([
+      fs.getDoc(fs.doc(db, 'gestores_gerais', usuario.uid)),
+      fs.getDoc(fs.doc(db, 'usuarios', usuario.uid)),
+      fs.getDocs(fs.collection(db, 'obras')),
+    ]);
+    const gestorGeral = gg.exists();
+    const obras = [];
+    await Promise.all(obrasSnap.docs.map(async (d) => {
+      let membro = null;
+      if (gestorGeral) membro = { gestor: true, papeis: { '*': 'admin' } };
+      else {
+        const m = await fs.getDoc(fs.doc(db, 'obras', d.id, 'membros', usuario.uid));
+        if (m.exists()) membro = m.data();
+      }
+      if (membro) obras.push({ id: d.id, ...d.data(), membro });
+    }));
+    obras.sort((a, b) => String(a.nome).localeCompare(String(b.nome), 'pt-BR'));
+    return {
+      uid: usuario.uid,
+      email: usuario.email,
+      nome: (cadastro.exists() && cadastro.data().nome) || usuario.displayName || usuario.email,
+      temCadastro: cadastro.exists(),
+      gestorGeral,
+      obras,
+    };
+  });
+}
+
+/** Garante o cadastro de quem foi criado pelo console (sem passar por "Criar conta"). */
+export function garantirCadastro(usuario, nome) {
+  return executar(async ({ db, fs }) => {
+    const nomeLimpo = String(nome || usuario.displayName || usuario.email.split('@')[0]).trim();
+    await fs.setDoc(fs.doc(db, 'usuarios', usuario.uid), { nome: nomeLimpo, email: usuario.email, criadoEm: new Date().toISOString() });
+    const ref = fs.doc(db, 'usuarios_email', usuario.email);
+    if (!(await fs.getDoc(ref)).exists()) await fs.setDoc(ref, { uid: usuario.uid, nome: nomeLimpo });
+  });
+}
+
+
+/* =============================================================================
+   04. GESTAO: OBRAS, MEMBROS E USUARIOS
+   ========================================================================== */
+
+/** Codigo da obra a partir da sigla: "WSF3" -> "wsf3", "Obra Nova 1" -> "obra-nova-1". */
+export function codigoObra(texto) {
+  return String(texto || '').normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+}
+
+/** Cria uma obra (gestor geral). Falha se o codigo ja existir. */
+export function criarObra({ codigo, nome, sigla, controles, autor }) {
+  return executar(async ({ db, fs }) => {
+    const ref = fs.doc(db, 'obras', codigo);
+    if ((await fs.getDoc(ref)).exists()) throw new Error(`Já existe uma obra com o código "${codigo}".`);
+    const agora = new Date().toISOString();
+    await fs.setDoc(ref, { nome, sigla, situacao: 'ativa', controles, criadoEm: agora, criadoPor: autor, atualizadoEm: agora, atualizadoPor: autor });
+  });
+}
+
+/** Atualiza campos da obra (gestor geral: tudo; gestor da obra: so "controles"). */
+export const atualizarObra = (codigo, campos, autor) => executar(({ db, fs }) =>
+  fs.updateDoc(fs.doc(db, 'obras', codigo), { ...campos, atualizadoEm: new Date().toISOString(), atualizadoPor: autor }));
+
+export const listarMembros = (obra) => executar(async ({ db, fs }) =>
+  (await fs.getDocs(fs.collection(db, 'obras', obra, 'membros'))).docs.map((d) => d.data()));
+
+export const salvarMembro = (obra, membro, autor) => executar(({ db, fs }) =>
+  fs.setDoc(fs.doc(db, 'obras', obra, 'membros', membro.uid), {
+    uid: membro.uid, nome: membro.nome || '', email: membro.email || '',
+    gestor: Boolean(membro.gestor), papeis: membro.papeis || {},
+    atualizadoEm: new Date().toISOString(), atualizadoPor: autor,
+  }));
+
+export const removerMembro = (obra, uid) => executar(({ db, fs }) =>
+  fs.deleteDoc(fs.doc(db, 'obras', obra, 'membros', uid)));
+
+/** Procura uma conta pelo e-mail exato. Retorna { uid, nome, email } ou null. */
+export const buscarUsuarioPorEmail = (email) => executar(async ({ db, fs }) => {
+  const limpo = String(email || '').trim().toLowerCase();
+  const d = await fs.getDoc(fs.doc(db, 'usuarios_email', limpo));
+  return d.exists() ? { ...d.data(), email: limpo } : null;
+});
+
+/** Todos os cadastros (somente gestor geral). */
+export const listarUsuarios = () => executar(async ({ db, fs }) =>
+  (await fs.getDocs(fs.collection(db, 'usuarios'))).docs.map((d) => ({ uid: d.id, ...d.data() })));
+
+
+/* =============================================================================
+   05. TELAS
+   ========================================================================== */
+
+function cartaoEntrada({ logo, titulo, subtitulo, rodape }, ...secoes) {
+  return h('div', { class: 'ctc-landing' },
+    h('div', { class: 'ctc-landing__card' },
+      h('div', { class: 'ctc-landing__brand' },
+        logo ? h('div', { class: 'ctc-landing__logo' }, conteudoLogo(logo)) : null,
+        h('h1', { class: 'ctc-landing__title' }, titulo),
+        subtitulo ? h('p', { class: 'ctc-landing__subtitle' }, subtitulo) : null),
+      ...secoes,
+      rodape ? h('div', { class: 'ctc-landing__footer' }, rodape) : null));
+}
+
+function abrirCriarConta() {
+  const formulario = criarFormulario({
+    colunas: 1,
+    semBotoes: true,
+    campos: [
+      { nome: 'nome', rotulo: 'Nome completo', obrigatorio: true, regras: { minCaracteres: 3, maxCaracteres: 80 } },
+      { nome: 'email', rotulo: 'E-mail', tipo: 'email', obrigatorio: true, atributos: { autocomplete: 'username' } },
+      { nome: 'senha', rotulo: 'Senha (mínimo 8 caracteres)', tipo: 'senha', obrigatorio: true, regras: { minCaracteres: 8 }, atributos: { autocomplete: 'new-password' } },
+      {
+        nome: 'senha2', rotulo: 'Repita a senha', tipo: 'senha', obrigatorio: true, atributos: { autocomplete: 'new-password' },
+        regras: { validar: (v, valores) => (v === valores.senha ? true : 'As senhas não conferem.') },
+      },
+    ],
+    onEnviar: async (v) => {
+      try {
+        await criarConta(v);
+        modal.fechar();
+        toast.sucesso('Conta criada', 'Aguarde um gestor liberar o seu acesso às obras.');
+      } catch (erro) {
+        formulario.definirErro(/e-mail/i.test(erro.message) ? 'email' : 'senha', erro.message);
+      }
+    },
+  });
+  const modal = criarModal({
+    titulo: 'Criar conta',
+    tamanho: 'sm',
+    destruirAoFechar: true,
+    conteudo: [
+      criarAlerta({ tipo: 'info', mensagem: 'Depois de criar a conta, um gestor precisa liberar as obras e os controles que você vai acessar.' }),
+      formulario.elemento,
+    ],
+    acoes: [
+      { texto: 'Cancelar', variante: 'outline' },
+      { texto: 'Criar conta', variante: 'primary', fechar: false, onClick: () => formulario.enviar() },
+    ],
+  });
+  modal.abrir();
+}
+
+async function abrirEsqueciSenha(emailInicial = '') {
+  const email = await solicitarValor({
+    titulo: 'Redefinir senha',
+    rotulo: 'Seu e-mail',
+    tipo: 'email',
+    valor: emailInicial,
+    obrigatorio: true,
+    textoConfirmar: 'Enviar link',
+  });
+  if (!email) return;
+  try {
+    await redefinirSenha(email);
+    toast.sucesso('Verifique seu e-mail', 'Se o e-mail estiver cadastrado, chegará um link para criar nova senha (veja também o spam).');
+  } catch (erro) {
+    toast.erro('Não foi possível enviar', erro.message);
+  }
+}
+
+/**
+ * Tela de login (substitui a tela de entrada com senha mestre da v1.6).
+ *   criarTelaLogin({ logo, titulo, subtitulo, rodape, permitirCriarConta })
+ * O que acontece depois do login e decidido por observarLogin no aplicativo.
+ */
+export function criarTelaLogin({ logo, titulo = 'Aplicativo KZ', subtitulo = 'Entre com seu e-mail e senha', rodape, permitirCriarConta = true } = {}) {
+  const formulario = criarFormulario({
+    colunas: 1,
+    textoEnviar: 'Entrar',
+    campos: [
+      { nome: 'email', rotulo: 'E-mail', tipo: 'email', obrigatorio: true, atributos: { autocomplete: 'username' } },
+      { nome: 'senha', rotulo: 'Senha', tipo: 'senha', obrigatorio: true, atributos: { autocomplete: 'current-password' } },
+    ],
+    onEnviar: async ({ email, senha }) => {
+      try { await entrar(email, senha); }
+      catch (erro) { formulario.definirErro('senha', erro.message); }
+    },
+  });
+
+  const elemento = cartaoEntrada({ logo, titulo, subtitulo, rodape },
+    h('section', { class: 'ctc-landing__section' },
+      h('div', { class: 'ctc-landing__section-title' }, 'Acesso'),
+      formulario.elemento,
+      criarBotao({ texto: 'Esqueci a senha', variante: 'ghost', bloco: true, onClick: () => abrirEsqueciSenha(formulario.obterValores().email) })),
+    permitirCriarConta ? h('section', { class: 'ctc-landing__section' },
+      h('div', { class: 'ctc-landing__section-title' }, 'Primeiro acesso'),
+      criarBotao({ texto: 'Criar conta', icone: 'usuario', variante: 'outline', bloco: true, onClick: abrirCriarConta })) : null);
+
+  return {
+    elemento,
+    mostrar: (alvo = document.body) => { formulario.limparErros(); alvo.append(elemento); },
+    remover: () => elemento.remove(),
+  };
+}
+
+/** Tela de quem entrou mas ainda nao tem nenhuma obra liberada. */
+export function criarTelaAguardando({ logo, titulo, perfil, rodape, onAtualizar, onSair }) {
+  const botaoAtualizar = criarBotao({ texto: 'Verificar de novo', icone: 'check', variante: 'primary', bloco: true });
+  botaoAtualizar.addEventListener('click', () => comCarregamento(botaoAtualizar, onAtualizar));
+  const elemento = cartaoEntrada({ logo, titulo, subtitulo: `Olá, ${perfil.nome}`, rodape },
+    h('section', { class: 'ctc-landing__section' },
+      criarAlerta({
+        tipo: 'info',
+        titulo: 'Aguardando liberação',
+        mensagem: `Sua conta (${perfil.email}) foi criada, mas ainda não tem nenhuma obra liberada. Peça ao gestor da sua obra para adicionar você.`,
+      }),
+      botaoAtualizar,
+      criarBotao({ texto: 'Sair', icone: 'sair', variante: 'outline', bloco: true, onClick: onSair })));
+  return { elemento, mostrar: (alvo = document.body) => alvo.append(elemento), remover: () => elemento.remove() };
+}
+
+function abrirTrocarSenha() {
+  const formulario = criarFormulario({
+    colunas: 1,
+    semBotoes: true,
+    campos: [
+      { nome: 'atual', rotulo: 'Senha atual', tipo: 'senha', obrigatorio: true, atributos: { autocomplete: 'current-password' } },
+      { nome: 'nova', rotulo: 'Nova senha (mínimo 8 caracteres)', tipo: 'senha', obrigatorio: true, regras: { minCaracteres: 8 }, atributos: { autocomplete: 'new-password' } },
+      {
+        nome: 'nova2', rotulo: 'Repita a nova senha', tipo: 'senha', obrigatorio: true, atributos: { autocomplete: 'new-password' },
+        regras: { validar: (v, valores) => (v === valores.nova ? true : 'As senhas não conferem.') },
+      },
+    ],
+    onEnviar: async ({ atual, nova }) => {
+      try {
+        await trocarSenha(atual, nova);
+        modal.fechar();
+        toast.sucesso('Senha alterada', 'Use a nova senha no próximo acesso.');
+      } catch (erro) {
+        formulario.definirErro(/atual|incorret/i.test(erro.message) ? 'atual' : 'nova', erro.message);
+      }
+    },
+  });
+  const modal = criarModal({
+    titulo: 'Trocar senha',
+    tamanho: 'sm',
+    destruirAoFechar: true,
+    conteudo: formulario.elemento,
+    acoes: [
+      { texto: 'Cancelar', variante: 'outline' },
+      { texto: 'Trocar senha', variante: 'primary', fechar: false, onClick: () => formulario.enviar() },
+    ],
+  });
+  modal.abrir();
+}
+
+/**
+ * Painel da sessao (botao do canto superior direito):
+ *   abrirPainelSessao({ perfil, descricao, abasExtras: [{ id, texto, conteudo }], onSair })
+ */
+export function abrirPainelSessao({ perfil, descricao = '', abasExtras = [], onSair }) {
+  let modal = null;
+  const sessao = h('div', { class: 'ctc-stack' },
+    h('p', { class: 'ctc-text-strong' }, perfil.nome),
+    h('p', { class: 'ctc-text-muted ctc-text-sm' }, perfil.email),
+    descricao ? h('p', { class: 'ctc-text-sm' }, descricao) : null,
+    h('div', { class: 'ctc-cluster' },
+      criarBotao({ texto: 'Trocar senha', icone: 'configuracao', variante: 'outline', onClick: () => { modal.fechar(); abrirTrocarSenha(); } }),
+      criarBotao({ texto: 'Sair', icone: 'sair', variante: 'danger-soft', onClick: () => { modal.fechar(); onSair(); } })));
+  const abas = criarAbas({
+    dentroDeModal: true,
+    abas: [{ id: 'sessao', texto: 'Sessão', conteudo: sessao }, ...abasExtras],
+  });
+  modal = criarModal({
+    titulo: 'Sessão',
+    destruirAoFechar: true,
+    conteudo: abas.elemento,
+    acoes: [{ texto: 'Fechar', variante: 'primary' }],
+  });
+  modal.abrir();
+}

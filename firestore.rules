@@ -1,0 +1,143 @@
+rules_version = '2';
+
+// =============================================================================
+// Regras do Firestore — projeto kz-planejamento-e-custos — Portal KZ (etapa 1)
+//
+// Perfis:
+//   Gestor geral      gestores_gerais/{uid}            (cadastrado SÓ pelo console)
+//   Gestor da obra    obras/{obra}/membros/{uid}.gestor == true
+//   admin/editor/leitor por controle: obras/{obra}/membros/{uid}.papeis
+//       { "*": "editor" }            → todos os controles da obra
+//       { "histograma": "leitor" }   → só esse controle
+//
+// Dados de cada controle: obras/{obra}/{controle}/...
+// =============================================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------- Funções ----------
+    function logado() {
+      return request.auth != null
+        && request.auth.token.firebase.sign_in_provider == 'password';
+    }
+    function eu() { return request.auth.uid; }
+
+    function ehGestorGeral() {
+      return logado() && exists(/databases/$(database)/documents/gestores_gerais/$(eu()));
+    }
+    function ehMembro(obra) {
+      return logado() && exists(/databases/$(database)/documents/obras/$(obra)/membros/$(eu()));
+    }
+    function membro(obra) {
+      return get(/databases/$(database)/documents/obras/$(obra)/membros/$(eu())).data;
+    }
+    function ehGestorObra(obra) {
+      return ehGestorGeral() || (ehMembro(obra) && membro(obra).get('gestor', false) == true);
+    }
+    function papel(obra, controle) {
+      let papeis = membro(obra).get('papeis', {});
+      return papeis.get(controle, papeis.get('*', ''));
+    }
+    function podeLer(obra, controle) {
+      return ehGestorObra(obra)
+        || (ehMembro(obra) && papel(obra, controle) in ['leitor', 'editor', 'admin']);
+    }
+    function podeEditar(obra, controle) {
+      return ehGestorObra(obra)
+        || (ehMembro(obra) && papel(obra, controle) in ['editor', 'admin']);
+    }
+    function podeExcluir(obra, controle) {
+      return ehGestorObra(obra)
+        || (ehMembro(obra) && papel(obra, controle) == 'admin');
+    }
+    function novo() { return request.resource.data; }
+    function mudou() { return request.resource.data.diff(resource.data).affectedKeys(); }
+
+    // ---------- Gestores gerais (somente console) ----------
+    match /gestores_gerais/{uid} {
+      allow read: if logado() && eu() == uid;
+      allow write: if false;
+    }
+
+    // ---------- Cadastro de usuários ("Criar conta") ----------
+    // Cada pessoa cria o próprio cadastro; só o nome pode mudar depois.
+    match /usuarios/{uid} {
+      allow get: if logado() && (eu() == uid || ehGestorGeral());
+      allow list: if ehGestorGeral();
+      allow create: if logado() && eu() == uid
+        && novo().keys().hasOnly(['nome', 'email', 'criadoEm'])
+        && novo().email == request.auth.token.email
+        && novo().nome is string && novo().nome.size() >= 3 && novo().nome.size() <= 80;
+      allow update: if logado() && eu() == uid && mudou().hasOnly(['nome'])
+        && novo().nome is string && novo().nome.size() >= 3 && novo().nome.size() <= 80;
+      allow delete: if false;
+    }
+    // Busca por e-mail (o gestor da obra adiciona alguém digitando o e-mail exato).
+    match /usuarios_email/{email} {
+      allow get: if logado();
+      allow list: if ehGestorGeral();
+      allow create: if logado() && email == request.auth.token.email
+        && novo().keys().hasOnly(['uid', 'nome']) && novo().uid == eu();
+      allow update, delete: if false;
+    }
+
+    // ---------- Obras ----------
+    match /obras/{obra} {
+      // Nome e lista de controles da obra (sem dados) — visível a quem está logado.
+      allow read: if logado();
+      allow create, delete: if ehGestorGeral();
+      allow update: if ehGestorGeral()
+        || (ehGestorObra(obra) && mudou().hasOnly(['controles', 'atualizadoEm', 'atualizadoPor']));
+
+      // Quem participa da obra e com qual perfil.
+      match /membros/{uid} {
+        allow read: if ehGestorObra(obra) || (logado() && eu() == uid);
+        // Gestor geral: tudo. Gestor da obra: só membros comuns (não cria nem altera gestores).
+        allow create: if novo().uid == uid && (ehGestorGeral()
+          || (ehGestorObra(obra) && novo().get('gestor', false) == false));
+        allow update: if novo().uid == uid && (ehGestorGeral()
+          || (ehGestorObra(obra) && resource.data.get('gestor', false) == false
+                                 && novo().get('gestor', false) == false));
+        allow delete: if ehGestorGeral()
+          || (ehGestorObra(obra) && resource.data.get('gestor', false) == false);
+      }
+
+      // Dados dos controles: obras/{obra}/{controle}/... (inclui subcoleções)
+      match /{controle}/{documento=**} {
+        allow read:   if controle != 'membros' && podeLer(obra, controle);
+        allow create, update: if controle != 'membros' && podeEditar(obra, controle);
+        allow delete: if controle != 'membros' && podeExcluir(obra, controle);
+      }
+    }
+
+    // ---------- Piloto anterior: Controle de Efetivo (até migrar para obras/wsf3/efetivo) ----------
+    function logadoComAcesso(app) {
+      return logado() && get(/databases/$(database)/documents/acessos/$(eu())).data.get(app, '') in ['leitor', 'editor', 'admin'];
+    }
+    function acessoApp(app) {
+      return get(/databases/$(database)/documents/acessos/$(eu())).data.get(app, '');
+    }
+    match /acessos/{uid} {
+      allow read: if logado() && eu() == uid;
+      allow write: if false;
+    }
+    match /{colecao}/{docId} {
+      allow read:   if colecao == 'Controle de Efetivo' && logadoComAcesso('efetivo');
+      allow create: if colecao == 'Controle de Efetivo' && logado() && acessoApp('efetivo') in ['editor', 'admin']
+                    && novo().get('createdBy', '') == request.auth.token.email;
+      allow update: if colecao == 'Controle de Efetivo' && logado() && acessoApp('efetivo') in ['editor', 'admin']
+                    && novo().get('updatedBy', '') == request.auth.token.email;
+      allow delete: if colecao == 'Controle de Efetivo' && logado() && acessoApp('efetivo') == 'admin';
+    }
+
+    // ---------- TEMPORÁRIO: apps antigos ainda sem login ----------
+    // Cada app migrado sai daqui. Quando todos migrarem, apague este bloco.
+    match /{colecao}/{caminho=**} {
+      allow read, write: if !(colecao in [
+        'acessos', 'Controle de Efetivo',
+        'gestores_gerais', 'usuarios', 'usuarios_email', 'obras'
+      ]);
+    }
+  }
+}

@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Portal KZ Planejamento</title>
+<!--
+  CTC App Base v1.0
+  Usa somente os arquivos compartilhados em ./compartilhado/:
+    design-system.css  (estilos)
+    componentes.js     (componentes)
+    funcionalidades.js (logica comum)
+  Requer servidor local (modulos JavaScript). Exemplo, nesta pasta:
+    python -m http.server 8000   ->   http://localhost:8000
+-->
+<link rel="stylesheet" href="./compartilhado/design-system.css">
+</head>
+<body>
+<noscript>
+  <div class="ctc-landing">
+    <div class="ctc-landing__card">
+      <div class="ctc-alert ctc-alert--danger"><div class="ctc-alert__content">
+        <div class="ctc-alert__title">JavaScript desativado</div>
+        <div class="ctc-alert__body">Ative o JavaScript no navegador para usar o CTC App Base.</div>
+      </div></div>
+    </div>
+  </div>
+</noscript>
+
+<!-- Aviso quando o arquivo e aberto direto do disco (file://), onde modulos sao bloqueados -->
+<script>
+  if (location.protocol === 'file:') {
+    document.addEventListener('DOMContentLoaded', function () {
+      document.body.innerHTML =
+        '<div class="ctc-landing"><div class="ctc-landing__card">' +
+        '<h1 class="ctc-title-page">CTC App Base</h1>' +
+        '<div class="ctc-alert ctc-alert--warning"><div class="ctc-alert__content">' +
+        '<div class="ctc-alert__title">Abra por um servidor local</div>' +
+        '<div class="ctc-alert__body">Este modelo usa m&oacute;dulos JavaScript, que o navegador bloqueia ' +
+        'quando o arquivo &eacute; aberto direto do disco. Na pasta ctc-app-base, execute ' +
+        '<code>python -m http.server 8000</code> e acesse <code>http://localhost:8000</code>.<br><br>' +
+        'Para abrir com duplo clique, sem servidor, use o arquivo <b>CTC-App-Base-arquivo-unico.html</b> ' +
+        'que est&aacute; nesta mesma pasta.</div>' +
+        '</div></div></div></div>';
+    });
+  }
+</script>
+<script type="module" src="./app.js"></script>
+</body>
+</html>
