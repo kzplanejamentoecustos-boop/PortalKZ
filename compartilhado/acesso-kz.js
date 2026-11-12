@@ -137,6 +137,17 @@ export function trocarSenha(senhaAtual, novaSenha) {
 }
 
 
+/** Altera o nome de quem esta logado (cadastro e perfil do Firebase). */
+export function alterarMeuNome(nome) {
+  return executar(async ({ auth, db, fa, fs }) => {
+    const u = auth.currentUser;
+    const nomeLimpo = String(nome || '').trim();
+    await fs.updateDoc(fs.doc(db, 'usuarios', u.uid), { nome: nomeLimpo });
+    await fa.updateProfile(u, { displayName: nomeLimpo });
+  });
+}
+
+
 /* =============================================================================
    03. PERFIL DO USUARIO
    ========================================================================== */
@@ -412,15 +423,32 @@ function abrirTrocarSenha() {
 
 /**
  * Painel da sessao (botao do canto superior direito):
- *   abrirPainelSessao({ perfil, descricao, abasExtras: [{ id, texto, conteudo }], onSair })
+ *   abrirPainelSessao({ perfil, descricao, abasExtras: [{ id, texto, conteudo }], onSair, onNomeAlterado })
  */
-export function abrirPainelSessao({ perfil, descricao = '', abasExtras = [], onSair }) {
+export function abrirPainelSessao({ perfil, descricao = '', abasExtras = [], onSair, onNomeAlterado }) {
   let modal = null;
+  async function alterarNome() {
+    modal.fechar();
+    const nome = await solicitarValor({
+      titulo: 'Alterar meu nome', rotulo: 'Nome completo', valor: perfil.nome, obrigatorio: true,
+      regras: { minCaracteres: 3, maxCaracteres: 80 }, textoConfirmar: 'Salvar',
+    });
+    if (!nome || nome.trim() === perfil.nome) return;
+    try {
+      await alterarMeuNome(nome);
+      toast.sucesso('Nome alterado', nome.trim());
+      if (typeof onNomeAlterado === 'function') onNomeAlterado(nome.trim());
+    } catch (erro) {
+      toast.erro('Nome não alterado', erro.message);
+    }
+  }
   const sessao = h('div', { class: 'ctc-stack' },
     h('p', { class: 'ctc-text-strong' }, perfil.nome),
     h('p', { class: 'ctc-text-muted ctc-text-sm' }, perfil.email),
     descricao ? h('p', { class: 'ctc-text-sm' }, descricao) : null,
+    criarAlerta({ tipo: 'info', mensagem: 'Você continua conectado neste navegador até clicar em "Sair". Em computador compartilhado, sempre saia ao terminar.' }),
     h('div', { class: 'ctc-cluster' },
+      criarBotao({ texto: 'Alterar meu nome', icone: 'editar', variante: 'outline', onClick: alterarNome }),
       criarBotao({ texto: 'Trocar senha', icone: 'configuracao', variante: 'outline', onClick: () => { modal.fechar(); abrirTrocarSenha(); } }),
       criarBotao({ texto: 'Sair', icone: 'sair', variante: 'danger-soft', onClick: () => { modal.fechar(); onSair(); } })));
   const abas = criarAbas({

@@ -789,10 +789,16 @@ function montarPortal(paginaInicial = 'inicio') {
   };
 
   const botaoSessao = criarBotao({
-    texto: perfil.nome,
+    texto: `${perfil.nome} · ${descricaoPerfil() || 'Usuário'}`,
     icone: 'usuario',
     variante: 'outline',
-    onClick: () => abrirPainelSessao({ perfil, descricao: descricaoPerfil(), onSair: sairDoPortal }),
+    titulo: 'Minha conta: nome, senha e sessão',
+    onClick: () => abrirPainelSessao({
+      perfil,
+      descricao: descricaoPerfil(),
+      onSair: sairDoPortal,
+      onNomeAlterado: () => recarregar(app ? app.paginaAtual() : 'inicio'),
+    }),
   });
 
   app = montarAplicativo({
@@ -803,6 +809,7 @@ function montarPortal(paginaInicial = 'inicio') {
       acoes: [
         { texto: 'Ajuda', icone: 'info', variante: 'outline', onClick: abrirAjuda },
         botaoSessao,
+        { texto: 'Sair', icone: 'sair', variante: 'outline', titulo: 'Sair do Portal KZ neste navegador', onClick: sairDoPortal },
       ],
     },
     menu: { secoes, rodape: 'KZ App Standard v1.7' },
