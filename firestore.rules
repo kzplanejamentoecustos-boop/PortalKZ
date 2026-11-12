@@ -51,6 +51,9 @@ service cloud.firestore {
       return ehGestorObra(obra)
         || (ehMembro(obra) && papel(obra, controle) == 'admin');
     }
+    function controleBase(controle) {
+      return controle.matches('^.+_conteudo$') ? controle.replace('_conteudo$', '') : controle;
+    }
     function novo() { return request.resource.data; }
     function mudou() { return request.resource.data.diff(resource.data).affectedKeys(); }
 
@@ -103,11 +106,12 @@ service cloud.firestore {
           || (ehGestorObra(obra) && resource.data.get('gestor', false) == false);
       }
 
-      // Dados dos controles: obras/{obra}/{controle}/... (inclui subcoleções)
+      // Dados dos controles: obras/{obra}/{controle}/... (inclui subcoleções).
+      // "{controle}_conteudo" (conteúdo das versões salvas) segue a permissão do próprio controle.
       match /{controle}/{documento=**} {
-        allow read:   if controle != 'membros' && podeLer(obra, controle);
-        allow create, update: if controle != 'membros' && podeEditar(obra, controle);
-        allow delete: if controle != 'membros' && podeExcluir(obra, controle);
+        allow read:   if controle != 'membros' && podeLer(obra, controleBase(controle));
+        allow create, update: if controle != 'membros' && podeEditar(obra, controleBase(controle));
+        allow delete: if controle != 'membros' && podeExcluir(obra, controleBase(controle));
       }
     }
 

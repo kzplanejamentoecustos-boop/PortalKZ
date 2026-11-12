@@ -79,6 +79,7 @@ const CONTROLES_BASICOS = {
 const OBRA_MIGRACAO = 'wsf3';
 const MIGRACOES = [
   { controle: 'efetivo', nome: 'Controle de Efetivo', origem: 'Controle de Efetivo' },
+  { controle: 'faturamento', nome: 'Faturamento Direto (versões salvas)', origem: 'ctc_faturamento_direto_versoes', comConteudo: true },
 ];
 
 const VARIANTE_PAPEL ={ admin: 'solid', editor: 'info', leitor: 'neutral' };
@@ -762,7 +763,7 @@ function paginaMigracao() {
               botao.disabled = true;
               try {
                 const r = await migrarColecao({
-                  origem: m.origem, obra: obra.id, controle: m.controle,
+                  origem: m.origem, obra: obra.id, controle: m.controle, comConteudo: Boolean(m.comConteudo),
                   onProgresso: (feitos, total) => { botao.textContent = `${feitos}/${total}…`; },
                 });
                 toast.sucesso('Migração concluída', `${m.nome}: ${r.copiados} copiado(s), ${r.ignorados} mantido(s) (já mais novos na obra), de ${r.total}.`);

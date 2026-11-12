@@ -203,6 +203,96 @@ export function carregarPerfil(usuario) {
   });
 }
 
+/**
+ * Obra dos aplicativos: vem do Portal (?obra=wsf3) ou da ultima obra escolhida no Portal.
+ * Retorna '' quando o aplicativo foi aberto sem obra.
+ */
+export function obraDaUrl() {
+  let o = new URLSearchParams(window.location.search).get('obra');
+  if (!o) { try { o = localStorage.getItem('kz-portal-obra'); } catch { o = null; } }
+  return String(o || '').toLowerCase().replace(/[^a-z0-9-]/g, '');
+}
+
+/**
+ * Perfil de quem esta logado em um controle de uma obra.
+ * Retorna { papel: ''|'leitor'|'editor'|'admin', obra: { id, nome, sigla, ... } | null, nome }.
+ */
+export function papelNaObra(obra, controle) {
+  return executar(async ({ auth, db, fs }) => {
+    const u = auth.currentUser;
+    const [gg, m, o, cadastro] = await Promise.all([
+      fs.getDoc(fs.doc(db, 'gestores_gerais', u.uid)),
+      fs.getDoc(fs.doc(db, 'obras', obra, 'membros', u.uid)),
+      fs.getDoc(fs.doc(db, 'obras', obra)),
+      fs.getDoc(fs.doc(db, 'usuarios', u.uid)),
+    ]);
+    const nome = (cadastro.exists() && cadastro.data().nome) || u.displayName || u.email;
+    if (!o.exists()) return { papel: '', obra: null, nome };
+    const papel = gg.exists() ? 'admin' : (m.exists() ? papelNoControle(m.data(), controle) : '');
+    return { papel, obra: { id: obra, ...o.data() }, nome };
+  });
+}
+
+/**
+ * Versoes salvas de um controle DENTRO da obra, usando o login do Firebase.
+ * Mesmos metodos e formato do armazenamento de versoes do padrao:
+ *   obras/{obra}/{controle}/{id}            -> { nome, salvoEm, autor, tamanho }
+ *   obras/{obra}/{controle}_conteudo/{id}   -> { conteudo: "<base JSON em texto>" }
+ */
+export function criarArmazenamentoObra({ obra, controle, limite = 900000 }) {
+  const colecao = ['obras', obra, controle];
+  const colecaoConteudo = ['obras', obra, `${controle}_conteudo`];
+  const serializar = (base) => {
+    const conteudo = JSON.stringify(base);
+    if (conteudo.length > limite) throw new Error(`A base tem ${Math.round(conteudo.length / 1024)} KB e passa do limite de cerca de 900 KB por salvamento. Reduza a logo ou fale com o suporte.`);
+    return conteudo;
+  };
+  return {
+    descricao: `Nuvem KZ — obra ${obra.toUpperCase()}`,
+    usandoFirebase: () => true,
+    obterConfig: () => null,
+    configurar: async () => { throw new Error('A nuvem é configurada pelo Portal KZ.'); },
+    removerConfig: () => {},
+    listar: () => executar(async ({ db, fs }) => {
+      const r = await fs.getDocs(fs.query(fs.collection(db, ...colecao), fs.orderBy('salvoEm', 'desc')));
+      return r.docs.map((d) => ({ id: d.id, ...d.data() }));
+    }),
+    salvar: ({ nome, base, autor }) => executar(async ({ db, fs }) => {
+      const conteudo = serializar(base);
+      const ref = fs.doc(fs.collection(db, ...colecao));
+      const meta = { nome: String(nome).trim(), salvoEm: new Date().toISOString(), autor: autor || '', tamanho: conteudo.length };
+      const lote = fs.writeBatch(db);
+      lote.set(ref, meta);
+      lote.set(fs.doc(db, ...colecaoConteudo, ref.id), { conteudo });
+      await lote.commit();
+      return { id: ref.id, ...meta };
+    }),
+    substituir: (id, { base, autor }) => executar(async ({ db, fs }) => {
+      const conteudo = serializar(base);
+      const refMeta = fs.doc(db, ...colecao, id);
+      const atual = await fs.getDoc(refMeta);
+      if (!atual.exists()) throw new Error('Versão não encontrada na nuvem.');
+      const meta = { ...atual.data(), salvoEm: new Date().toISOString(), autor: autor || atual.data().autor || '', tamanho: conteudo.length };
+      const lote = fs.writeBatch(db);
+      lote.set(refMeta, meta);
+      lote.set(fs.doc(db, ...colecaoConteudo, id), { conteudo });
+      await lote.commit();
+      return { id, ...meta };
+    }),
+    abrir: (id) => executar(async ({ db, fs }) => {
+      const [meta, dados] = await Promise.all([fs.getDoc(fs.doc(db, ...colecao, id)), fs.getDoc(fs.doc(db, ...colecaoConteudo, id))]);
+      if (!meta.exists() || !dados.exists()) throw new Error('Versão não encontrada na nuvem.');
+      return { id, ...meta.data(), base: JSON.parse(dados.data().conteudo) };
+    }),
+    remover: (id) => executar(async ({ db, fs }) => {
+      const lote = fs.writeBatch(db);
+      lote.delete(fs.doc(db, ...colecao, id));
+      lote.delete(fs.doc(db, ...colecaoConteudo, id));
+      await lote.commit();
+    }),
+  };
+}
+
 /** Garante o cadastro de quem foi criado pelo console (sem passar por "Criar conta"). */
 export function garantirCadastro(usuario, nome) {
   return executar(async ({ db, fs }) => {
@@ -266,12 +356,14 @@ export const contarDocumentos = (partes) => executar(async ({ db, fs }) =>
  * Copia uma colecao antiga (formato de antes do Portal) para obras/{obra}/{controle}.
  * - A colecao antiga NAO e alterada (fica como backup).
  * - Documento que ja existe no destino e foi atualizado DEPOIS da origem nao e sobrescrito.
+ * - comConteudo: versoes do padrao (lista em "origem" + conteudo em "origem_conteudo"):
+ *   o conteudo de cada versao e copiado JUNTO com a lista, com a mesma decisao.
  * Retorna { total, copiados, ignorados }.
  */
-export function migrarColecao({ origem, obra, controle, onProgresso }) {
+export function migrarColecao({ origem, obra, controle, comConteudo = false, onProgresso }) {
   return executar(async ({ db, fs }) => {
     const snap = await fs.getDocs(fs.collection(db, origem));
-    const dataDe = (d) => String(d.updatedAt || d.atualizadoEm || d.salvoEmISO || d.createdAt || '');
+    const dataDe = (d) => String(d.updatedAt || d.atualizadoEm || d.salvoEmISO || d.salvoEm || d.createdAt || '');
     let copiados = 0;
     let ignorados = 0;
     for (const doc of snap.docs) {
@@ -281,7 +373,16 @@ export function migrarColecao({ origem, obra, controle, onProgresso }) {
       if (atual.exists() && dataDe(atual.data()) > dataDe(dados)) {
         ignorados += 1;
       } else {
-        await fs.setDoc(destino, { ...dados, _migradoDe: origem, _migradoEm: new Date().toISOString() });
+        const marca = { _migradoDe: origem, _migradoEm: new Date().toISOString() };
+        if (comConteudo) {
+          const conteudo = await fs.getDoc(fs.doc(db, `${origem}_conteudo`, doc.id));
+          const lote = fs.writeBatch(db);
+          lote.set(destino, { ...dados, ...marca });
+          if (conteudo.exists()) lote.set(fs.doc(db, 'obras', obra, `${controle}_conteudo`, doc.id), conteudo.data());
+          await lote.commit();
+        } else {
+          await fs.setDoc(destino, { ...dados, ...marca });
+        }
         copiados += 1;
       }
       if (typeof onProgresso === 'function') onProgresso(copiados + ignorados, snap.size);
