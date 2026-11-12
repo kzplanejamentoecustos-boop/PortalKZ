@@ -361,6 +361,43 @@ function abrirEditorMembro(obra, membro, aoSalvar) {
 }
 
 /**
+ * O e-mail ja tem login no Firebase, mas a pessoa nunca entrou no Portal (sem cadastro).
+ * O Portal nao consegue ver esse login; a saida e mandar o e-mail de acesso: no primeiro
+ * login o cadastro e criado e a pessoa aparece em Usuarios / "Adicionar pessoa".
+ */
+function abrirContaSemCadastro(email, nome) {
+  criarModal({
+    titulo: 'Este e-mail já tem login',
+    destruirAoFechar: true,
+    conteudo: [
+      h('p', {}, `${email} já tem login no Firebase, mas ${nome || 'a pessoa'} ainda não entrou no Portal KZ, então o cadastro dela não existe.`),
+      criarAlerta({
+        tipo: 'info',
+        titulo: 'Como resolver',
+        mensagem: 'Envie o e-mail de acesso: ela cria uma senha e entra no Portal. A partir desse primeiro acesso, ela aparece em Gestão geral > Usuários (aguardando liberação) e em "Adicionar pessoa", onde você define o acesso.',
+      }),
+    ],
+    acoes: [
+      { texto: 'Cancelar', variante: 'outline' },
+      {
+        texto: 'Enviar e-mail de acesso', variante: 'primary',
+        onClick: async () => {
+          try {
+            const r = await enviarEmailDeSenha(email, PORTAL_URL);
+            notificar({
+              tipo: 'success', duracao: 0, titulo: 'E-mail de acesso enviado',
+              mensagem: `${email} vai receber um link para criar a senha${r.comRetorno ? ' e entrar no Portal KZ' : ''} (veja também o spam). Depois do primeiro acesso, libere em "Adicionar pessoa".`,
+            });
+          } catch (erro) {
+            toast.erro('E-mail não enviado', erro.message);
+          }
+        },
+      },
+    ],
+  }).abrir();
+}
+
+/**
  * Cadastra uma pessoa nova pelo Portal (sem ela precisar clicar em "Criar conta")
  * e em seguida abre o acesso dela na obra.
  */
@@ -391,10 +428,12 @@ function abrirCadastroPessoa(obra, aoSalvar, emailInicial = '') {
       try {
         pessoa = await cadastrarPessoa({ nome: v.nome, email: v.email, senha: v.modo === 'provisoria' ? v.senha : null });
       } catch (erro) {
-        const msg = /Já existe uma conta/i.test(erro.message)
-          ? 'Já existe uma conta com este e-mail, mas ela ainda não entrou no Portal. Peça para a pessoa entrar uma vez no Portal KZ, ou use "Adicionar pessoa" depois.'
-          : erro.message;
-        formulario.definirErro('email', msg);
+        if (erro.code === 'conta-sem-cadastro') {
+          modal.fechar();
+          abrirContaSemCadastro(v.email, v.nome);
+          return;
+        }
+        formulario.definirErro('email', erro.message);
         return;
       }
       modal.fechar();

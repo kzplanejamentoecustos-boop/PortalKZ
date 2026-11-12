@@ -88,7 +88,11 @@ export function traduzirErroAcesso(erro) {
 
 async function executar(operacao) {
   try { return await operacao(await sdk()); }
-  catch (erro) { throw new Error(traduzirErroAcesso(erro)); }
+  catch (erro) {
+    const traduzido = new Error(traduzirErroAcesso(erro));
+    if (erro && erro.code) traduzido.code = erro.code;
+    throw traduzido;
+  }
 }
 
 
@@ -160,11 +164,27 @@ export function cadastrarPessoa({ nome, email, senha }) {
     const app2 = moduloApp.initializeApp(configFirebase, nomeApp);
     try {
       const auth2 = fa2.initializeAuth(app2, { persistence: fa2.inMemoryPersistence });
-      const cred = await fa2.createUserWithEmailAndPassword(auth2, emailLimpo, senha || senhaAleatoria());
-      await fa2.updateProfile(cred.user, { displayName: nomeLimpo });
-      const db2 = fs2.getFirestore(app2);
-      await fs2.setDoc(fs2.doc(db2, 'usuarios', cred.user.uid), { nome: nomeLimpo, email: cred.user.email, criadoEm: new Date().toISOString() });
-      await fs2.setDoc(fs2.doc(db2, 'usuarios_email', cred.user.email), { uid: cred.user.uid, nome: nomeLimpo });
+      let cred;
+      try {
+        cred = await fa2.createUserWithEmailAndPassword(auth2, emailLimpo, senha || senhaAleatoria());
+      } catch (erro) {
+        if (erro && erro.code === 'auth/email-already-in-use') {
+          const e = new Error('Já existe um login com este e-mail, mas sem cadastro no Portal.');
+          e.code = 'conta-sem-cadastro';
+          throw e;
+        }
+        throw erro;
+      }
+      try {
+        await fa2.updateProfile(cred.user, { displayName: nomeLimpo });
+        const db2 = fs2.getFirestore(app2);
+        await fs2.setDoc(fs2.doc(db2, 'usuarios', cred.user.uid), { nome: nomeLimpo, email: cred.user.email, criadoEm: new Date().toISOString() });
+        await fs2.setDoc(fs2.doc(db2, 'usuarios_email', cred.user.email), { uid: cred.user.uid, nome: nomeLimpo });
+      } catch (erro) {
+        // nao deixa conta pela metade: desfaz o login criado e informa o erro
+        await fa2.deleteUser(cred.user).catch(() => {});
+        throw erro;
+      }
       await fa2.signOut(auth2);
       return { uid: cred.user.uid, nome: nomeLimpo, email: cred.user.email, jaExistia: false };
     } finally {
