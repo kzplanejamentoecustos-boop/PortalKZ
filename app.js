@@ -33,7 +33,7 @@ import { formatarData, ordenar } from './compartilhado/funcionalidades.js';
 
 import {
   iniciarFirebase, observarLogin, sair, carregarPerfil, garantirCadastro,
-  criarTelaLogin, criarTelaAguardando, abrirPainelSessao,
+  criarTelaLogin, criarTelaAviso, abrirPainelSessao,
   PAPEIS, papelNoControle, codigoObra, criarObra, atualizarObra,
   listarMembros, salvarMembro, removerMembro, buscarUsuarioPorEmail, listarUsuarios,
   contarDocumentos, migrarColecao, cadastrarPessoa, enviarEmailDeSenha,
@@ -100,8 +100,9 @@ let telaAguardando = null;
 const telaLogin = criarTelaLogin({
   logo: MARCA.logo,
   titulo: MARCA.titulo,
-  subtitulo: 'Entre com seu e-mail e senha',
+  subtitulo: 'Acesso dos gestores',
   rodape: RODAPE,
+  permitirCriarConta: false,
 });
 
 function limparTela() {
@@ -131,12 +132,14 @@ async function recarregar(pagina) {
   }
 
   limparTela();
-  if (!perfil.gestorGeral && !perfil.obras.length) {
-    telaAguardando = criarTelaAguardando({
-      logo: MARCA.logo, titulo: MARCA.titulo, perfil, rodape: RODAPE,
-      onAtualizar: () => recarregar(), onSair: sairDoPortal,
+  // O Portal e so dos gestores (geral ou de obra). A equipe usa o link direto de cada controle.
+  if (!perfil.gestorGeral && !perfil.obras.some((o) => o.membro && o.membro.gestor)) {
+    telaAguardando = criarTelaAviso({
+      logo: MARCA.logo, titulo: MARCA.titulo,
+      aviso: 'Acesso restrito aos gestores',
+      mensagem: 'Este painel é usado pelos gestores. Para trabalhar nos controles, use o link que o gestor da obra enviou para você.',
+      onSair: sairDoPortal,
     });
-    telaAguardando.mostrar();
     return;
   }
 
@@ -295,7 +298,7 @@ function paginaControles() {
    ========================================================================== */
 
 /** Editor de acesso de uma pessoa na obra. membro: existente ou { uid, nome, email } novo. */
-function abrirEditorMembro(obra, membro, aoSalvar) {
+function abrirEditorMembro(obra, membro, aoSalvar, senhaProvisoria = '') {
   const papeis = membro.papeis || {};
   const opcoesPadrao = [
     { valor: '', texto: 'Sem acesso' },
@@ -338,6 +341,7 @@ function abrirEditorMembro(obra, membro, aoSalvar) {
         modal.fechar();
         toast.sucesso('Acesso salvo', `${membro.nome} — ${obra.sigla}`);
         aoSalvar();
+        abrirLinksAcesso(obra, { ...membro, gestor: perfil.gestorGeral ? Boolean(v.gestor) : false, papeis: novos }, senhaProvisoria);
       } catch (erro) {
         toast.erro('Acesso não salvo', erro.message);
       }
@@ -360,6 +364,64 @@ function abrirEditorMembro(obra, membro, aoSalvar) {
   modal.abrir();
 }
 
+/** Link direto de um controle numa obra (sem passar pelo Portal). */
+function linkControle(obra, controle) {
+  const url = new URL(controle.url);
+  url.searchParams.set('obra', obra.id);
+  return url.toString();
+}
+
+async function copiar(texto, rotulo = 'Copiado') {
+  try { await navigator.clipboard.writeText(texto); toast.sucesso(rotulo); }
+  catch { toast.aviso('Não foi possível copiar', 'Selecione o texto e copie com Ctrl+C.'); }
+}
+
+/**
+ * Mostra os links dos controles liberados para a pessoa nesta obra, prontos para enviar.
+ * senhaProvisoria (opcional) entra so na mensagem copiada; nao e guardada.
+ */
+function abrirLinksAcesso(obra, membro, senhaProvisoria = '') {
+  const liberados = listaControles(obra)
+    .map((c) => ({ ...c, papel: papelNoControle(membro, c.id) }))
+    .filter((c) => c.papel);
+  const linhas = liberados.map((c) => `• ${c.nome} (${PAPEIS[c.papel]}): ${linkControle(obra, c)}`);
+  const mensagem = [
+    `Olá, ${String(membro.nome || '').split(' ')[0]}! Seu acesso na obra ${obra.nome} (${obra.sigla}):`,
+    '',
+    ...linhas,
+    '',
+    `Login: ${membro.email}`,
+    senhaProvisoria ? `Senha provisória: ${senhaProvisoria}` : 'Senha: a que você criou (ou use "Esqueci a senha" na tela de login).',
+  ].join('\n');
+
+  criarModal({
+    titulo: `Links de acesso — ${membro.nome}`,
+    tamanho: 'lg',
+    destruirAoFechar: true,
+    conteudo: liberados.length ? [
+      criarAlerta({ tipo: 'info', mensagem: 'Envie para a pessoa só estes links (por e-mail ou WhatsApp). Ela entra direto no controle, com o login dela, sem ver este painel.' }),
+      criarTabela({
+        dados: liberados, altura: 'auto', compacta: true,
+        colunas: [
+          { campo: 'nome', titulo: 'Controle' },
+          { campo: 'papel', titulo: 'Perfil', render: (v) => badgePapel(v) },
+          { campo: 'url', titulo: 'Link', ordenavel: false, classe: 'ctc-mono', formatar: (_, c) => linkControle(obra, c) },
+          {
+            campo: 'acoes', titulo: '', ordenavel: false, classe: 'ctc-col--actions',
+            render: (_, c) => criarBotao({ texto: 'Copiar', variante: 'ghost', tamanho: 'sm', onClick: () => copiar(linkControle(obra, c), 'Link copiado') }),
+          },
+        ],
+      }).elemento,
+      h('p', { class: 'ctc-text-sm ctc-text-muted' }, 'Mensagem pronta (com todos os links e o login):'),
+      h('pre', { class: 'ctc-mono ctc-text-sm' }, mensagem),
+    ] : [criarAlerta({ tipo: 'warning', mensagem: 'Esta pessoa ainda não tem nenhum controle liberado nesta obra.' })],
+    acoes: [
+      { texto: 'Fechar', variante: 'outline' },
+      liberados.length ? { texto: 'Copiar mensagem', icone: 'documento', variante: 'primary', fechar: false, onClick: () => copiar(mensagem, 'Mensagem copiada') } : null,
+    ].filter(Boolean),
+  }).abrir();
+}
+
 /**
  * O e-mail ja tem login no Firebase, mas a pessoa nunca entrou no Portal (sem cadastro).
  * O Portal nao consegue ver esse login; a saida e mandar o e-mail de acesso: no primeiro
@@ -370,29 +432,15 @@ function abrirContaSemCadastro(email, nome) {
     titulo: 'Este e-mail já tem login',
     destruirAoFechar: true,
     conteudo: [
-      h('p', {}, `${email} já tem login no Firebase, mas ${nome || 'a pessoa'} ainda não entrou no Portal KZ, então o cadastro dela não existe.`),
+      h('p', {}, `${email} já tem um login antigo no Firebase, sem cadastro na KZ (provavelmente de uma tentativa anterior). O painel não consegue reaproveitar esse login.`),
       criarAlerta({
         tipo: 'info',
-        titulo: 'Como resolver',
-        mensagem: 'Envie o e-mail de acesso: ela cria uma senha e entra no Portal. A partir desse primeiro acesso, ela aparece em Gestão geral > Usuários (aguardando liberação) e em "Adicionar pessoa", onde você define o acesso.',
+        titulo: 'Como resolver (1 minuto)',
+        mensagem: 'No console do Firebase: Authentication > Usuários > procure este e-mail > ⋮ > Excluir conta. Depois volte aqui e use "Cadastrar pessoa nova" de novo.',
       }),
     ],
     acoes: [
-      { texto: 'Cancelar', variante: 'outline' },
-      {
-        texto: 'Enviar e-mail de acesso', variante: 'primary',
-        onClick: async () => {
-          try {
-            const r = await enviarEmailDeSenha(email, PORTAL_URL);
-            notificar({
-              tipo: 'success', duracao: 0, titulo: 'E-mail de acesso enviado',
-              mensagem: `${email} vai receber um link para criar a senha${r.comRetorno ? ' e entrar no Portal KZ' : ''} (veja também o spam). Depois do primeiro acesso, libere em "Adicionar pessoa".`,
-            });
-          } catch (erro) {
-            toast.erro('E-mail não enviado', erro.message);
-          }
-        },
-      },
+      { texto: 'Entendi', variante: 'primary' },
     ],
   }).abrir();
 }
@@ -405,20 +453,20 @@ function abrirCadastroPessoa(obra, aoSalvar, emailInicial = '') {
   const formulario = criarFormulario({
     colunas: 1,
     semBotoes: true,
-    valores: { email: emailInicial, modo: 'email' },
+    valores: { email: emailInicial, modo: 'provisoria' },
     campos: [
       { nome: 'nome', rotulo: 'Nome completo', obrigatorio: true, regras: { minCaracteres: 3, maxCaracteres: 80 } },
       { nome: 'email', rotulo: 'E-mail', tipo: 'email', obrigatorio: true },
       {
         nome: 'modo', rotulo: 'Senha', tipo: 'radio', obrigatorio: true,
         opcoes: [
-          { valor: 'email', texto: 'Enviar e-mail para a pessoa criar a senha (recomendado)' },
-          { valor: 'provisoria', texto: 'Definir uma senha provisória' },
+          { valor: 'provisoria', texto: 'Definir uma senha provisória (vai junto com os links)' },
+          { valor: 'email', texto: 'Enviar e-mail para a pessoa criar a própria senha' },
         ],
       },
       {
         nome: 'senha', rotulo: 'Senha provisória (se escolheu essa opção)', tipo: 'senha',
-        dica: 'Mínimo 8 caracteres. Passe para a pessoa e peça para trocar no primeiro acesso.',
+        dica: 'Mínimo 8 caracteres. Ela pode trocar depois em "Esqueci a senha" na tela de login do controle.',
         regras: { validar: (v, valores) => (valores.modo !== 'provisoria' || String(v || '').length >= 8 ? true : 'Informe ao menos 8 caracteres.') },
         atributos: { autocomplete: 'new-password' },
       },
@@ -445,28 +493,27 @@ function abrirCadastroPessoa(obra, aoSalvar, emailInicial = '') {
         toast.info('Esta pessoa já tem conta', `${pessoa.nome} — defina o acesso dela na ${obra.sigla}.`);
       } else if (v.modo === 'email') {
         try {
-          const r = await enviarEmailDeSenha(pessoa.email, PORTAL_URL);
+          await enviarEmailDeSenha(pessoa.email);
           notificar({
             tipo: 'success', duracao: 0,
             titulo: `Conta criada: ${pessoa.nome}`,
-            mensagem: r.comRetorno
-              ? `Enviamos para ${pessoa.email} um e-mail para criar a senha; depois o link leva direto ao Portal KZ. Peça para olhar também o spam.`
-              : `Enviamos para ${pessoa.email} um e-mail para criar a senha (veja também o spam). Depois, ela entra pelo Portal KZ.`,
+            mensagem: `Enviamos para ${pessoa.email} um e-mail para criar a senha (veja também o spam). Em seguida, defina o acesso e envie os links dos controles.`,
           });
         } catch (erro) {
           toast.aviso('Conta criada, mas o e-mail não foi enviado', `${erro.message} Use "Esqueci a senha" no login ou defina uma senha provisória.`);
         }
       } else {
-        notificar({ tipo: 'success', duracao: 0, titulo: `Conta criada: ${pessoa.nome}`, mensagem: `Passe para a pessoa o e-mail ${pessoa.email}, a senha provisória e o endereço do Portal KZ. Ela pode trocar a senha no botão com o nome dela.` });
+        toast.sucesso(`Conta criada: ${pessoa.nome}`, 'Agora defina o acesso; em seguida aparecem os links para enviar.');
       }
-      abrirEditorMembro(obra, { uid: pessoa.uid, nome: pessoa.nome, email: pessoa.email, papeis: {} }, aoSalvar);
+      abrirEditorMembro(obra, { uid: pessoa.uid, nome: pessoa.nome, email: pessoa.email, papeis: {} }, aoSalvar,
+        !pessoa.jaExistia && v.modo === 'provisoria' ? v.senha : '');
     },
   });
   const modal = criarModal({
     titulo: `Cadastrar pessoa nova — ${obra.sigla}`,
     destruirAoFechar: true,
     conteudo: [
-      criarAlerta({ tipo: 'info', mensagem: 'A conta é criada agora e, em seguida, você define o acesso dela nesta obra. Você continua logado com a sua conta.' }),
+      criarAlerta({ tipo: 'info', mensagem: 'A conta é criada agora; em seguida você define o acesso nesta obra e recebe os links diretos dos controles para enviar à pessoa. Ela não precisa acessar este painel. Você continua logado com a sua conta.' }),
       formulario.elemento,
     ],
     acoes: [
@@ -523,6 +570,7 @@ function paginaEquipe() {
           render: (_, linha) => {
             const podeMexer = perfil.gestorGeral || !linha.gestor;
             return h('div', { class: 'ctc-btn-group' },
+              criarBotao({ texto: 'Links', variante: 'ghost', tamanho: 'sm', titulo: `Links de acesso de ${linha.nome}`, onClick: () => abrirLinksAcesso(obra, linha) }),
               criarBotao({ icone: 'editar', variante: 'ghost', tamanho: 'sm', titulo: `Editar acesso de ${linha.nome}`, desabilitado: !podeMexer, onClick: () => abrirEditorMembro(obra, linha, atualizar) }),
               criarBotao({
                 icone: 'lixeira', variante: 'ghost', tamanho: 'sm', titulo: `Remover ${linha.nome} da obra`, desabilitado: !podeMexer || linha.uid === perfil.uid,

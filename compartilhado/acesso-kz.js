@@ -319,6 +319,58 @@ export function papelNaObra(obra, controle) {
 }
 
 /**
+ * Obras em que quem esta logado tem acesso a um controle (para abrir o controle direto,
+ * sem passar pelo Portal). Retorna [{ id, nome, sigla, papel }], ordenado pelo nome.
+ */
+export function obrasComAcesso(controle) {
+  return executar(async ({ auth, db, fs }) => {
+    const u = auth.currentUser;
+    const [gg, obras] = await Promise.all([
+      fs.getDoc(fs.doc(db, 'gestores_gerais', u.uid)),
+      fs.getDocs(fs.collection(db, 'obras')),
+    ]);
+    const lista = await Promise.all(obras.docs.map(async (o) => {
+      if (o.data().situacao === 'encerrada' && !gg.exists()) return null;
+      let papel = '';
+      if (gg.exists()) papel = 'admin';
+      else {
+        const m = await fs.getDoc(fs.doc(db, 'obras', o.id, 'membros', u.uid));
+        if (m.exists()) papel = papelNoControle(m.data(), controle);
+      }
+      return papel ? { id: o.id, nome: o.data().nome, sigla: o.data().sigla, papel } : null;
+    }));
+    return lista.filter(Boolean).sort((a, b) => String(a.nome).localeCompare(String(b.nome), 'pt-BR'));
+  });
+}
+
+/**
+ * Tela para escolher a obra quando a pessoa tem acesso ao controle em mais de uma.
+ *   escolherObra({ titulo, obras, onEscolher(obra), onSair })  -> { remover }
+ */
+export function criarTelaEscolhaObra({ logo = 'KZ', titulo, obras, onEscolher, onSair }) {
+  const elemento = cartaoEntrada({ logo, titulo, subtitulo: 'Escolha a obra' },
+    h('section', { class: 'ctc-landing__section' },
+      ...obras.map((o) => criarBotao({
+        texto: `${o.sigla} — ${o.nome}`, variante: 'outline', bloco: true,
+        onClick: () => { elemento.remove(); onEscolher(o); },
+      })),
+      criarBotao({ texto: 'Sair', icone: 'sair', variante: 'ghost', bloco: true, onClick: onSair })));
+  document.body.append(elemento);
+  return { remover: () => elemento.remove() };
+}
+
+/** Tela de aviso dos controles (sem acesso, obra nao encontrada etc.), sem citar o Portal. */
+export function criarTelaAviso({ logo = 'KZ', titulo, aviso, mensagem, acoes = [], onSair }) {
+  const elemento = cartaoEntrada({ logo, titulo },
+    h('section', { class: 'ctc-landing__section' },
+      criarAlerta({ tipo: 'warning', titulo: aviso, mensagem }),
+      ...acoes,
+      criarBotao({ texto: 'Sair', icone: 'sair', variante: 'ghost', bloco: true, onClick: onSair })));
+  document.body.append(elemento);
+  return { remover: () => elemento.remove() };
+}
+
+/**
  * Versoes salvas de um controle DENTRO da obra, usando o login do Firebase.
  * Mesmos metodos e formato do armazenamento de versoes do padrao:
  *   obras/{obra}/{controle}/{id}            -> { nome, salvoEm, autor, tamanho }
