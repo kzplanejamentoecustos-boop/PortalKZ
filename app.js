@@ -357,11 +357,35 @@ function abrirEditorMembro(obra, membro, aoSalvar, senhaProvisoria = '') {
       formulario.elemento,
     ],
     acoes: [
+      membro.email ? {
+        texto: 'Reenviar e-mail de senha', variante: 'ghost', fechar: false,
+        onClick: () => reenviarEmailDeSenha(membro),
+      } : null,
       { texto: 'Cancelar', variante: 'outline' },
       { texto: 'Salvar acesso', variante: 'primary', fechar: false, onClick: () => formulario.enviar() },
-    ],
+    ].filter(Boolean),
   });
   modal.abrir();
+}
+
+/** Reenvia o e-mail para a pessoa criar (ou trocar) a senha. */
+async function reenviarEmailDeSenha(membro) {
+  const ok = await confirmar({
+    titulo: 'Reenviar e-mail de senha?',
+    mensagem: `Vamos enviar para ${membro.email} um e-mail para ${membro.nome || 'a pessoa'} criar uma senha nova. A senha atual deixa de valer quando a nova for criada.`,
+    textoConfirmar: 'Reenviar',
+  });
+  if (!ok) return;
+  try {
+    await enviarEmailDeSenha(membro.email);
+    notificar({
+      tipo: 'success', duracao: 0,
+      titulo: 'E-mail reenviado',
+      mensagem: `Enviado para ${membro.email}. Se não chegar em alguns minutos, peça para olhar o spam e a quarentena (remetente noreply@kz-planejamento-e-custos.firebaseapp.com).`,
+    });
+  } catch (erro) {
+    toast.erro('E-mail não enviado', erro.message);
+  }
 }
 
 /** Link direto de um controle numa obra (sem passar pelo Portal). */
