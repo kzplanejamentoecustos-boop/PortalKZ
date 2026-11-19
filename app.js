@@ -217,6 +217,57 @@ function validarLink(valor) {
 
 
 /* =============================================================================
+   02b. LANCADOR DE APLICATIVOS (icones e cores de cada controle)
+   ========================================================================== */
+
+/** Desenho (SVG 24x24, traco) de cada controle. */
+const ICONES_APP = {
+  efetivo: '<circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17" cy="9" r="2.5"/><path d="M15.5 14.2c3 .2 5.5 2.6 5.5 5.8"/>',
+  custos: '<circle cx="12" cy="12" r="9"/><path d="M15 9.2c-.6-1-1.7-1.6-3-1.6-1.8 0-3 1-3 2.3 0 3.2 6 1.8 6 4.8 0 1.3-1.3 2.3-3 2.3-1.4 0-2.6-.6-3.2-1.7M12 6v1.6M12 16.9v1.6"/>',
+  medicao: '<rect x="2.5" y="8" width="19" height="8" rx="1.5"/><path d="M6 8v3.5M9.5 8v2M13 8v3.5M16.5 8v2M20 8v3.5"/>',
+  faturamento: '<path d="M6 3h12v18l-2.5-1.6L13 21l-2.5-1.6L8 21l-2-1.4V3z"/><path d="M9 8h6M9 12h6M9 16h3"/>',
+  histograma: '<path d="M3 21h18"/><rect x="5" y="11" width="3" height="10"/><rect x="10.5" y="6" width="3" height="15"/><rect x="16" y="14" width="3" height="7"/>',
+  suprimentos: '<path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z"/><path d="M4 7.5l8 4.5 8-4.5M12 12v9"/>',
+  cronograma: '<rect x="3" y="4.5" width="18" height="16" rx="2"/><path d="M3 9h18M8 3v3M16 3v3"/><path d="M7 13h6M10 16.5h7"/>',
+  organograma: '<rect x="9" y="3" width="6" height="5" rx="1"/><rect x="3" y="16" width="6" height="5" rx="1"/><rect x="15" y="16" width="6" height="5" rx="1"/><path d="M12 8v4M6 16v-4h12v4"/>',
+  'relatorio-fotografico': '<path d="M4 7.5h3l1.7-2.5h6.6L17 7.5h3a1 1 0 011 1V19a1 1 0 01-1 1H4a1 1 0 01-1-1V8.5a1 1 0 011-1z"/><circle cx="12" cy="13.3" r="3.6"/>',
+  'relatorio-bexup': '<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4V3h6v1"/><path d="M8.5 10h7M8.5 13.5h7M8.5 17h4"/>',
+  atividades: '<rect x="4" y="3.5" width="16" height="17.5" rx="2"/><path d="M8 9l1.5 1.5L12 8M8 15l1.5 1.5L12 14M14 9.5h3M14 15.5h3"/>',
+  padrao: '<rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5"/>',
+};
+/** Cor de cada controle (classes kz-cor-N do portal.css). */
+const COR_APP = {
+  efetivo: 2, custos: 5, medicao: 3, faturamento: 1, histograma: 4, suprimentos: 7,
+  cronograma: 8, organograma: 2, 'relatorio-fotografico': 6, 'relatorio-bexup': 7, atividades: 4,
+};
+
+/** Chave do icone: pelo codigo do controle ou, nos controles proprios, pelo nome. */
+function chaveApp(controle) {
+  if (ICONES_APP[controle.id]) return controle.id;
+  const nome = String(controle.nome || '').toLowerCase();
+  if (nome.includes('atividade')) return 'atividades';
+  return Object.keys(ICONES_APP).find((k) => nome.includes(k.split('-')[0])) || 'padrao';
+}
+
+function iconeApp(chave, cor) {
+  const caixa = h('span', { class: `kz-app__icone kz-cor-${cor}`, 'aria-hidden': 'true' });
+  caixa.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${ICONES_APP[chave]}</svg>`;
+  return caixa;
+}
+
+/** Faixa colorida no topo da pagina. */
+function faixaBoasVindas(titulo, texto, acao) {
+  return h('div', { class: 'kz-boas-vindas' },
+    h('div', {}, h('p', { class: 'kz-boas-vindas__titulo' }, titulo), h('p', { class: 'kz-boas-vindas__texto' }, texto)),
+    acao ? h('div', { class: 'kz-boas-vindas__acao' }, acao) : null);
+}
+
+function primeiroNome() {
+  return String(perfil.nome || '').split(/[\s.@]/)[0].replace(/^./, (l) => l.toUpperCase());
+}
+
+
+/* =============================================================================
    03. PAGINA: MINHAS OBRAS
    ========================================================================== */
 
@@ -224,27 +275,28 @@ function paginaInicio() {
   const obras = perfil.obras;
   const ativas = obras.filter((o) => o.situacao !== 'encerrada').length;
 
-  const cartoes = obras.map((obra) => criarCard({
-    interativo: true,
-    onClick: () => selecionarObra(obra),
-    conteudo: h('div', { class: 'ctc-stack' },
-      h('div', { class: 'ctc-cluster' },
-        criarBadge({ texto: obra.sigla || obra.id, variante: 'solid' }),
-        obra.situacao === 'encerrada' ? criarBadge({ texto: 'Encerrada', variante: 'neutral' }) : criarBadge({ texto: 'Ativa', variante: 'success' }),
-        obraAtual && obraAtual.id === obra.id ? criarBadge({ texto: 'Selecionada', variante: 'info' }) : null),
-      h('p', { class: 'ctc-text-strong' }, obra.nome),
-      h('p', { class: 'ctc-text-muted ctc-text-sm' },
-        ehGestorDaObra(obra) ? 'Você é gestor desta obra' : `${listaControles(obra).filter((c) => papelNoControle(obra.membro, c.id)).length} controle(s) liberado(s)`)),
-  }));
+  const cartoes = obras.map((obra, i) => {
+    const qtd = listaControles(obra).filter((c) => papelNoControle(obra.membro, c.id)).length;
+    return h('button', { type: 'button', class: 'kz-app', onClick: () => selecionarObra(obra), title: `Abrir ${obra.nome}` },
+      h('span', { class: `kz-app__icone kz-cor-${[7, 1, 2, 4, 3][i % 5]}`, 'aria-hidden': 'true' },
+        h('span', { class: 'kz-app__sigla' }, obra.sigla || obra.id)),
+      h('span', { class: 'kz-app__textos' },
+        h('span', { class: 'kz-app__nome' }, obra.nome),
+        h('span', { class: 'kz-app__linha' },
+          obra.situacao === 'encerrada' ? criarBadge({ texto: 'Encerrada', variante: 'neutral' }) : criarBadge({ texto: 'Ativa', variante: 'success' })),
+        h('span', { class: 'kz-app__papel' }, ehGestorDaObra(obra) ? `Você é gestor · ${qtd} aplicativo(s)` : `${qtd} aplicativo(s) liberado(s)`)));
+  });
 
+  const faixa = faixaBoasVindas(`Olá, ${primeiroNome()}!`, obras.length ? 'Escolha a obra para ver os seus aplicativos.' : 'Ainda não há obras liberadas para você.');
   const painelObras = criarPainel({
     titulo: 'Minhas obras', icone: 'painel',
-    conteudo: obras.length ? h('div', { class: 'ctc-grid ctc-grid--3' }, cartoes) : h('p', { class: 'ctc-text-muted' }, perfil.gestorGeral ? 'Nenhuma obra cadastrada.' : 'Nenhuma obra liberada para você. Fale com o gestor da obra.'),
+    conteudo: obras.length ? h('div', { class: 'kz-apps kz-apps--obras' }, cartoes) : h('p', { class: 'ctc-text-muted' }, perfil.gestorGeral ? 'Nenhuma obra cadastrada.' : 'Nenhuma obra liberada para você. Fale com o gestor da obra.'),
   }).elemento;
   // Quem nao e gestor ve so a lista de obras.
-  if (!souGestor()) return [painelObras];
+  if (!souGestor()) return [faixa, painelObras];
 
   return [
+    faixa,
     h('div', { class: 'ctc-grid ctc-grid--3' },
       criarKpi({ rotulo: 'Obras com acesso', valor: obras.length, formato: 'numero', tamanho: 'lg' }).elemento,
       criarKpi({ rotulo: 'Obras ativas', valor: ativas, formato: 'numero', variante: 'success' }).elemento,
@@ -275,17 +327,20 @@ function paginaControles() {
   const obra = obraAtual;
   const liberados = listaControles(obra).filter((c) => papelNoControle(obra.membro, c.id));
 
-  const cartoes = liberados.map((c) => {
+  // Cada controle e um "aplicativo": icone colorido + nome; um clique abre o controle.
+  const cartoes = liberados.map((c, i) => {
     const papel = papelNoControle(obra.membro, c.id);
-    return criarCard({
-      conteudo: h('div', { class: 'ctc-stack' },
-        h('div', { class: 'ctc-cluster' }, badgePapel(papel), c.basico ? null : criarBadge({ texto: 'Próprio da obra', variante: 'warning' })),
-        h('p', { class: 'ctc-text-strong' }, c.nome),
-        criarBotao({ texto: 'Abrir', iconeDireita: 'chevron-direita', variante: 'primary', onClick: () => abrirControle(obra, c) })),
-    });
+    const chave = chaveApp(c);
+    const cor = COR_APP[chave] || (i % 8) + 1;
+    return h('button', { type: 'button', class: `kz-app kz-cor-${cor}`, onClick: () => abrirControle(obra, c), title: `Abrir ${c.nome}` },
+      c.basico ? null : h('span', { class: 'kz-app__marca' }, 'Da obra'),
+      iconeApp(chave, cor),
+      h('span', { class: 'kz-app__nome' }, c.nome),
+      h('span', { class: 'kz-app__papel' }, PAPEIS[papel] || papel));
   });
 
   return [
+    faixaBoasVindas(obra.nome, liberados.length ? 'Clique em um aplicativo para abrir.' : 'Nenhum aplicativo liberado para você nesta obra.'),
     criarAlerta({
       tipo: 'warning',
       titulo: 'Adaptação em andamento',
@@ -293,9 +348,9 @@ function paginaControles() {
       fechavel: true,
     }),
     criarPainel({
-      titulo: `Controles — ${obra.nome}`, icone: 'tabela', tag: obra.sigla,
+      titulo: 'Meus aplicativos', icone: 'painel', tag: obra.sigla,
       conteudo: liberados.length
-        ? h('div', { class: 'ctc-grid ctc-grid--3' }, cartoes)
+        ? h('div', { class: 'kz-apps' }, cartoes)
         : h('p', { class: 'ctc-text-muted' }, 'Nenhum controle liberado para você nesta obra. Fale com o gestor da obra.'),
     }).elemento,
   ];

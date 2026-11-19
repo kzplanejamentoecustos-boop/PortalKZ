@@ -1,0 +1,92 @@
+/* =============================================================================
+   Portal KZ — estilos proprios do Portal (lancador de aplicativos).
+   Usa so os tokens do design-system.css; nao altera a biblioteca compartilhada.
+   ========================================================================== */
+
+/* ---------- Faixa de boas-vindas ---------- */
+.kz-boas-vindas {
+  display: flex; align-items: center; gap: 16px;
+  padding: 20px 24px; border-radius: 16px;
+  background: linear-gradient(135deg, var(--ctc-brand-900), var(--ctc-brand-600));
+  color: var(--ctc-white);
+}
+.kz-boas-vindas__titulo { font-size: 1.25rem; font-weight: 700; margin: 0; }
+.kz-boas-vindas__texto { margin: 2px 0 0; opacity: .85; font-size: .9rem; }
+.kz-boas-vindas__acao { margin-left: auto; }
+
+/* ---------- Grade de aplicativos ---------- */
+.kz-apps {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 16px;
+}
+.kz-apps--obras { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
+
+.kz-app {
+  position: relative;
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+  padding: 22px 12px 16px;
+  border: 1px solid var(--ctc-color-border);
+  border-radius: 18px;
+  background: var(--ctc-color-surface);
+  color: var(--ctc-color-text);
+  font: inherit; text-align: center; cursor: pointer;
+  transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease;
+}
+.kz-app:hover {
+  transform: translateY(-3px);
+  border-color: var(--ctc-brand-300);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, .12);
+}
+.kz-app:active { transform: translateY(-1px) scale(.98); }
+.kz-app:focus-visible { outline: 3px solid var(--ctc-color-focus); outline-offset: 2px; }
+
+.kz-app__icone {
+  display: grid; place-items: center;
+  width: 72px; height: 72px; border-radius: 20px;
+  color: var(--ctc-white);
+  background: linear-gradient(145deg, var(--kz-cor-clara), var(--kz-cor));
+  box-shadow: 0 6px 14px color-mix(in srgb, var(--kz-cor) 35%, transparent);
+}
+.kz-app__icone svg { width: 36px; height: 36px; }
+.kz-app__sigla { font-size: 1.15rem; font-weight: 800; letter-spacing: .5px; }
+
+.kz-app__nome { font-weight: 600; font-size: .92rem; line-height: 1.25; color: var(--ctc-color-text-strong); }
+.kz-app__papel { font-size: .75rem; color: var(--ctc-color-text-muted); }
+.kz-app__marca {
+  position: absolute; top: 10px; right: 10px;
+  font-size: .65rem; font-weight: 700; padding: 2px 7px; border-radius: 999px;
+  background: var(--ctc-warning-soft); color: var(--ctc-warning-dark);
+}
+
+/* Cartao de obra: icone ao lado do texto */
+.kz-apps--obras .kz-app { flex-direction: row; align-items: center; text-align: left; padding: 18px; gap: 16px; }
+.kz-apps--obras .kz-app__textos { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.kz-app__linha { display: flex; gap: 6px; flex-wrap: wrap; }
+
+/* Cores dos aplicativos */
+.kz-cor-1 { --kz-cor: var(--ctc-cat-1); --kz-cor-clara: var(--ctc-cat-1-light); }
+.kz-cor-2 { --kz-cor: var(--ctc-cat-2); --kz-cor-clara: var(--ctc-cat-2-light); }
+.kz-cor-3 { --kz-cor: var(--ctc-cat-3); --kz-cor-clara: var(--ctc-cat-3-light); }
+.kz-cor-4 { --kz-cor: var(--ctc-cat-4); --kz-cor-clara: var(--ctc-cat-4-light); }
+.kz-cor-5 { --kz-cor: var(--ctc-success-strong); --kz-cor-clara: var(--ctc-success-solid); }
+.kz-cor-6 { --kz-cor: var(--ctc-danger-strong); --kz-cor-clara: var(--ctc-danger-solid); }
+.kz-cor-7 { --kz-cor: var(--ctc-brand-900); --kz-cor-clara: var(--ctc-brand-600); }
+.kz-cor-8 { --kz-cor: var(--ctc-info-strong); --kz-cor-clara: var(--ctc-info-solid); }
+
+/* Aplicativos da obra: icones soltos, sem cartao (como a tela inicial do celular) */
+.kz-apps:not(.kz-apps--obras) { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; }
+.kz-apps:not(.kz-apps--obras) .kz-app { background: transparent; border: none; box-shadow: none; padding: 14px 6px; }
+.kz-apps:not(.kz-apps--obras) .kz-app:hover { background: var(--ctc-color-surface-alt); box-shadow: none; }
+.kz-apps:not(.kz-apps--obras) .kz-app__nome { font-weight: 500; font-size: .85rem; }
+.kz-apps:not(.kz-apps--obras) .kz-app__icone { width: 76px; height: 76px; border-radius: 22px; }
+
+@media (max-width: 600px) {
+  .kz-apps { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 12px; }
+  .kz-app__icone { width: 60px; height: 60px; border-radius: 16px; }
+  .kz-app__icone svg { width: 30px; height: 30px; }
+  .kz-apps:not(.kz-apps--obras) { grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 4px; }
+  .kz-apps:not(.kz-apps--obras) .kz-app__icone { width: 62px; height: 62px; border-radius: 18px; }
+  .kz-boas-vindas { flex-wrap: wrap; }
+  .kz-boas-vindas__acao { margin-left: 0; }
+}
