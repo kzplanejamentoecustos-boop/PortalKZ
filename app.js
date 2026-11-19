@@ -100,7 +100,7 @@ let telaAguardando = null;
 const telaLogin = criarTelaLogin({
   logo: MARCA.logo,
   titulo: MARCA.titulo,
-  subtitulo: 'Acesso dos gestores',
+  subtitulo: 'Acesso às obras e controles',
   rodape: RODAPE,
   permitirCriarConta: false,
 });
@@ -132,22 +132,27 @@ async function recarregar(pagina) {
   }
 
   limparTela();
-  // O Portal e so dos gestores (geral ou de obra). A equipe usa o link direto de cada controle.
-  if (!perfil.gestorGeral && !perfil.obras.some((o) => o.membro && o.membro.gestor)) {
-    telaAguardando = criarTelaAviso({
-      logo: MARCA.logo, titulo: MARCA.titulo,
-      aviso: 'Acesso restrito aos gestores',
-      mensagem: 'Este painel é usado pelos gestores. Para trabalhar nos controles, use o link que o gestor da obra enviou para você.',
-      onSair: sairDoPortal,
-    });
-    return;
-  }
+  // Todo mundo com login entra. Quem nao e gestor ve so "Minhas obras" e os controles liberados;
+  // a obra so aparece se a pessoa tiver acesso a pelo menos um controle dela.
+  perfil.obras = perfil.obras.filter((o) => ehGestorDaObra(o)
+    || listaControles(o).some((c) => papelNoControle(o.membro, c.id)));
 
   const salva = lerObraSalva();
   obraAtual = perfil.obras.find((o) => o.id === (obraAtual && obraAtual.id))
     || perfil.obras.find((o) => o.id === salva)
     || perfil.obras[0] || null;
-  montarPortal(pagina || 'inicio');
+  // Sem pagina pedida (F5, link direto, login): fica na pagina do # da URL, se ela estiver no menu desta pessoa.
+  const doHash = window.location.hash.slice(1);
+  montarPortal(pagina || (paginaPermitida(doHash) ? doHash : 'inicio'));
+}
+
+/** A pagina aparece no menu desta pessoa, com a obra atual? */
+function paginaPermitida(id) {
+  if (id === 'inicio') return true;
+  if (id === 'controles') return Boolean(obraAtual);
+  if (id === 'equipe' || id === 'config-controles') return Boolean(obraAtual) && ehGestorDaObra(obraAtual);
+  if (id === 'obras' || id === 'usuarios' || id === 'migracao') return Boolean(perfil && perfil.gestorGeral);
+  return false;
 }
 
 
@@ -232,21 +237,25 @@ function paginaInicio() {
         ehGestorDaObra(obra) ? 'Você é gestor desta obra' : `${listaControles(obra).filter((c) => papelNoControle(obra.membro, c.id)).length} controle(s) liberado(s)`)),
   }));
 
+  const painelObras = criarPainel({
+    titulo: 'Minhas obras', icone: 'painel',
+    conteudo: obras.length ? h('div', { class: 'ctc-grid ctc-grid--3' }, cartoes) : h('p', { class: 'ctc-text-muted' }, perfil.gestorGeral ? 'Nenhuma obra cadastrada.' : 'Nenhuma obra liberada para você. Fale com o gestor da obra.'),
+  }).elemento;
+  // Quem nao e gestor ve so a lista de obras.
+  if (!souGestor()) return [painelObras];
+
   return [
     h('div', { class: 'ctc-grid ctc-grid--3' },
       criarKpi({ rotulo: 'Obras com acesso', valor: obras.length, formato: 'numero', tamanho: 'lg' }).elemento,
       criarKpi({ rotulo: 'Obras ativas', valor: ativas, formato: 'numero', variante: 'success' }).elemento,
       criarKpi({ rotulo: 'Seu perfil', valor: perfil.gestorGeral ? 'Gestor geral' : (obras.some((o) => o.membro.gestor) ? 'Gestor de obra' : 'Usuário'), variante: 'accent' }).elemento),
-    obras.length ? null : criarAlerta({
+    obras.length || !perfil.gestorGeral ? null : criarAlerta({
       tipo: 'info',
       titulo: 'Nenhuma obra cadastrada',
       mensagem: 'Crie a primeira obra em Gestão geral > Obras.',
       acoes: perfil.gestorGeral ? [{ texto: 'Ir para Obras', onClick: () => app.navegar('obras') }] : [],
     }),
-    criarPainel({
-      titulo: 'Minhas obras', icone: 'painel',
-      conteudo: obras.length ? h('div', { class: 'ctc-grid ctc-grid--3' }, cartoes) : h('p', { class: 'ctc-text-muted' }, 'Nenhuma obra liberada.'),
-    }).elemento,
+    painelObras,
   ];
 }
 
@@ -297,8 +306,32 @@ function paginaControles() {
    05. PAGINA: EQUIPE DA OBRA (gestor)
    ========================================================================== */
 
+/**
+ * Abre o editor de acesso de uma pessoa encontrada pelo e-mail ou pela lista de contas.
+ * Se ela ja for da obra, carrega os acessos atuais (e avisa), para nao apaga-los ao salvar.
+ */
+async function abrirEditorPessoa(obra, pessoa, aoSalvar, senhaProvisoria = '') {
+  let existente = null;
+  try {
+    existente = (await listarMembros(obra.id)).find((m) => m.uid === pessoa.uid) || null;
+  } catch (erro) {
+    toast.erro('Não foi possível conferir a equipe da obra', erro.message);
+    return;
+  }
+  if (!existente) {
+    abrirEditorMembro(obra, { uid: pessoa.uid, nome: pessoa.nome, email: pessoa.email, papeis: {} }, aoSalvar, senhaProvisoria);
+    return;
+  }
+  if (existente.gestor && !perfil.gestorGeral) {
+    toast.aviso(`${existente.nome || pessoa.nome} já é gestor desta obra`, 'Só o gestor geral altera o acesso de um gestor.');
+    return;
+  }
+  abrirEditorMembro(obra, { ...existente, nome: existente.nome || pessoa.nome, email: existente.email || pessoa.email },
+    aoSalvar, senhaProvisoria, true);
+}
+
 /** Editor de acesso de uma pessoa na obra. membro: existente ou { uid, nome, email } novo. */
-function abrirEditorMembro(obra, membro, aoSalvar, senhaProvisoria = '') {
+function abrirEditorMembro(obra, membro, aoSalvar, senhaProvisoria = '', avisarJaMembro = false) {
   const papeis = membro.papeis || {};
   const opcoesPadrao = [
     { valor: '', texto: 'Sem acesso' },
@@ -353,6 +386,11 @@ function abrirEditorMembro(obra, membro, aoSalvar, senhaProvisoria = '') {
     tamanho: 'lg',
     destruirAoFechar: true,
     conteudo: [
+      avisarJaMembro ? criarAlerta({
+        tipo: 'info',
+        titulo: `${membro.nome} já faz parte desta obra.`,
+        mensagem: 'Os acessos atuais foram carregados abaixo; altere só o que precisar.',
+      }) : null,
       h('p', { class: 'ctc-text-muted ctc-text-sm' }, membro.email),
       formulario.elemento,
     ],
@@ -529,7 +567,7 @@ function abrirCadastroPessoa(obra, aoSalvar, emailInicial = '') {
       } else {
         toast.sucesso(`Conta criada: ${pessoa.nome}`, 'Agora defina o acesso; em seguida aparecem os links para enviar.');
       }
-      abrirEditorMembro(obra, { uid: pessoa.uid, nome: pessoa.nome, email: pessoa.email, papeis: {} }, aoSalvar,
+      await abrirEditorPessoa(obra, pessoa, aoSalvar,
         !pessoa.jaExistia && v.modo === 'provisoria' ? v.senha : '');
     },
   });
@@ -566,7 +604,7 @@ async function adicionarPessoa(obra, aoSalvar, emailInicial = '') {
       }).abrir();
       return;
     }
-    abrirEditorMembro(obra, { uid: encontrado.uid, nome: encontrado.nome, email: encontrado.email, papeis: {} }, aoSalvar);
+    await abrirEditorPessoa(obra, encontrado, aoSalvar);
   } catch (erro) {
     toast.erro('Não foi possível procurar', erro.message);
   }
@@ -857,7 +895,7 @@ function escolherObraPara(usuario) {
     onEnviar: ({ obra: id }) => {
       const obra = perfil.obras.find((o) => o.id === id);
       modal.fechar();
-      if (obra) abrirEditorMembro(obra, { uid: usuario.uid, nome: usuario.nome, email: usuario.email, papeis: {} }, () => app.navegar('usuarios'));
+      if (obra) abrirEditorPessoa(obra, usuario, () => app.navegar('usuarios'));
     },
   });
   const modal = criarModal({
@@ -889,7 +927,7 @@ function paginaUsuarios() {
       dados: ordenar(linhas, [{ campo: 'qtd' }, { campo: 'nome' }]),
       altura: 'auto',
       compacta: true,
-      vazio: { titulo: 'Nenhuma conta', mensagem: 'As contas aparecem quando as pessoas usam "Criar conta".' },
+      vazio: { titulo: 'Nenhuma conta', mensagem: 'As contas aparecem aqui quando um gestor cadastra a pessoa em Equipe da obra > "Cadastrar pessoa nova".' },
       linhaVariante: (l) => (l.qtd ? null : 'warning'),
       colunas: [
         { campo: 'nome', titulo: 'Nome' },
@@ -992,7 +1030,7 @@ function abrirAjuda() {
     titulo: 'Sobre o Portal KZ',
     destruirAoFechar: true,
     conteudo: [
-      h('p', {}, 'Ponto único de acesso aos controles da KZ Planejamento. Cada pessoa vê apenas as obras e os controles liberados para ela.'),
+      h('p', {}, 'Ponto de acesso aos controles da KZ Planejamento. Em "Minhas obras" aparecem as obras em que você tem acesso a algum controle; ao abrir a obra, você vê só os controles liberados para você. Os gestores também liberam aqui a equipe e os controles da obra.'),
       criarAlerta({
         tipo: 'info',
         titulo: 'Perfis',
@@ -1001,7 +1039,7 @@ function abrirAjuda() {
       criarAlerta({
         tipo: 'success',
         titulo: 'Segurança',
-        mensagem: 'As permissões são conferidas pelo banco de dados (regras do Firebase), não só por esta tela.',
+        mensagem: 'Nos controles já adaptados por obra, as permissões são conferidas pelo banco de dados (regras do Firebase), não só por esta tela. Os controles ainda no modelo antigo continuam como antes até serem adaptados.',
       }),
     ],
     acoes: [{ texto: 'Fechar', variante: 'primary' }],
@@ -1043,7 +1081,11 @@ function montarPortal(paginaInicial = 'inicio') {
   const caminhoObra = obra ? [`Obra ${obra.sigla}`] : [];
   const paginas = {
     inicio: { titulo: 'Minhas obras', caminho: ['Início'], render: paginaInicio },
-    controles: { titulo: 'Controles', caminho: caminhoObra, render: paginaControles },
+    controles: {
+      titulo: 'Controles', caminho: caminhoObra, render: paginaControles,
+      // sem menu, quem nao e gestor volta para as obras por este botao
+      acoes: souGestor() ? [] : [{ texto: 'Minhas obras', icone: 'chevron-esquerda', variante: 'outline', onClick: () => app.navegar('inicio') }],
+    },
     equipe: {
       titulo: 'Equipe da obra', caminho: caminhoObra, render: paginaEquipe,
       acoes: gestorObra ? [
@@ -1066,6 +1108,9 @@ function montarPortal(paginaInicial = 'inicio') {
     migracao: { titulo: 'Migração de dados', caminho: ['Gestão geral'], render: paginaMigracao },
   };
 
+  // So existem as paginas do menu desta pessoa (digitar #equipe na URL nao abre nada para quem nao pode).
+  Object.keys(paginas).forEach((id) => { if (!paginaPermitida(id)) delete paginas[id]; });
+
   const botaoSessao = criarBotao({
     texto: `${perfil.nome} · ${descricaoPerfil() || 'Usuário'}`,
     icone: 'usuario',
@@ -1085,15 +1130,28 @@ function montarPortal(paginaInicial = 'inicio') {
       titulo: MARCA.titulo,
       subtitulo: obra ? `${obra.nome} (${obra.sigla})` : '',
       acoes: [
-        { texto: 'Ajuda', icone: 'info', variante: 'outline', onClick: abrirAjuda },
+        souGestor() ? { texto: 'Ajuda', icone: 'info', variante: 'outline', onClick: abrirAjuda } : null,
         botaoSessao,
         { texto: 'Sair', icone: 'sair', variante: 'outline', titulo: 'Sair do Portal KZ neste navegador', onClick: sairDoPortal },
-      ],
+      ].filter(Boolean),
     },
     menu: { secoes, rodape: 'KZ App Standard v1.7' },
     paginas,
     paginaInicial: paginas[paginaInicial] ? paginaInicial : 'inicio',
   });
+
+  // Quem nao e gestor ve so as obras e os controles: sem o botao "Menu" e sem o painel do menu.
+  if (!souGestor()) {
+    const botaoMenu = app.elemento.querySelector('.ctc-header__menu-toggle');
+    if (botaoMenu) botaoMenu.remove();
+    const painelMenu = app.elemento.querySelector('.ctc-sidebar');
+    if (painelMenu) painelMenu.remove();
+  }
+}
+
+/** Gestor geral ou gestor de alguma obra (ve o menu e as paginas de gestao). */
+function souGestor() {
+  return Boolean(perfil && (perfil.gestorGeral || perfil.obras.some((o) => o.membro && o.membro.gestor)));
 }
 
 /* Inicio: carrega o Firebase e acompanha o login. */
