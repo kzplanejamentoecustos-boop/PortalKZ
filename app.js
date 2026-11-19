@@ -271,43 +271,69 @@ function primeiroNome() {
    03. PAGINA: MINHAS OBRAS
    ========================================================================== */
 
+function saudacao() {
+  const hora = new Date().getHours();
+  return hora < 12 ? 'Bom dia' : hora < 18 ? 'Boa tarde' : 'Boa noite';
+}
+
+/** Cartao grande da obra: capa colorida com a sigla + nome + icones dos aplicativos liberados. */
+function cartaoObra(obra, i) {
+  const liberados = listaControles(obra).filter((c) => papelNoControle(obra.membro, c.id));
+  const encerrada = obra.situacao === 'encerrada';
+  const mostrar = liberados.slice(0, 6);
+  const resto = liberados.length - mostrar.length;
+  const selecionada = obraAtual && obraAtual.id === obra.id;
+
+  return h('button', { type: 'button', class: `kz-obra kz-cor-${[7, 2, 4, 1, 3][i % 5]}`, onClick: () => selecionarObra(obra), title: `Entrar em ${obra.nome}` },
+    h('span', { class: 'kz-obra__capa' },
+      h('span', { class: 'kz-obra__sigla' }, obra.sigla || obra.id),
+      h('span', { class: 'kz-obra__etiquetas' },
+        selecionada ? h('span', { class: 'kz-obra__etiqueta' }, 'Última aberta') : null,
+        h('span', { class: `kz-obra__etiqueta ${encerrada ? '' : 'kz-obra__etiqueta--ativa'}` }, encerrada ? 'Encerrada' : '● Ativa'))),
+    h('span', { class: 'kz-obra__corpo' },
+      h('span', { class: 'kz-obra__nome' }, obra.nome),
+      h('span', { class: 'kz-obra__info' },
+        ehGestorDaObra(obra) ? 'Você é gestor desta obra' : 'Você faz parte desta obra'),
+      h('span', { class: 'kz-obra__mini' },
+        ...mostrar.map((c, j) => { const k = chaveApp(c); return iconeApp(k, COR_APP[k] || (j % 8) + 1); }),
+        resto > 0 ? h('span', { class: 'kz-obra__mais' }, `+${resto}`) : null),
+      h('span', { class: 'kz-obra__rodape' },
+        h('span', {}, `${liberados.length} aplicativo${liberados.length === 1 ? '' : 's'}`),
+        h('span', { class: 'kz-obra__entrar' }, 'Entrar →'))));
+}
+
 function paginaInicio() {
   const obras = perfil.obras;
   const ativas = obras.filter((o) => o.situacao !== 'encerrada').length;
+  const papel = perfil.gestorGeral ? 'Gestor geral' : (obras.some((o) => o.membro.gestor) ? 'Gestor de obra' : 'Equipe');
 
-  const cartoes = obras.map((obra, i) => {
-    const qtd = listaControles(obra).filter((c) => papelNoControle(obra.membro, c.id)).length;
-    return h('button', { type: 'button', class: 'kz-app', onClick: () => selecionarObra(obra), title: `Abrir ${obra.nome}` },
-      h('span', { class: `kz-app__icone kz-cor-${[7, 1, 2, 4, 3][i % 5]}`, 'aria-hidden': 'true' },
-        h('span', { class: 'kz-app__sigla' }, obra.sigla || obra.id)),
-      h('span', { class: 'kz-app__textos' },
-        h('span', { class: 'kz-app__nome' }, obra.nome),
-        h('span', { class: 'kz-app__linha' },
-          obra.situacao === 'encerrada' ? criarBadge({ texto: 'Encerrada', variante: 'neutral' }) : criarBadge({ texto: 'Ativa', variante: 'success' })),
-        h('span', { class: 'kz-app__papel' }, ehGestorDaObra(obra) ? `Você é gestor · ${qtd} aplicativo(s)` : `${qtd} aplicativo(s) liberado(s)`)));
-  });
+  const faixa = h('div', { class: 'kz-boas-vindas kz-boas-vindas--grande' },
+    h('div', {},
+      h('p', { class: 'kz-boas-vindas__titulo' }, `${saudacao()}, ${primeiroNome()}!`),
+      h('p', { class: 'kz-boas-vindas__texto' }, obras.length ? 'Escolha a obra para ver os seus aplicativos.' : 'Ainda não há obras liberadas para você.')),
+    h('div', { class: 'kz-numeros' },
+      h('span', { class: 'kz-numero' }, h('strong', {}, String(obras.length)), obras.length === 1 ? 'obra' : 'obras'),
+      h('span', { class: 'kz-numero' }, h('strong', {}, String(ativas)), ativas === 1 ? 'ativa' : 'ativas'),
+      h('span', { class: 'kz-numero kz-numero--texto' }, h('strong', {}, papel), 'seu perfil')));
 
-  const faixa = faixaBoasVindas(`Olá, ${primeiroNome()}!`, obras.length ? 'Escolha a obra para ver os seus aplicativos.' : 'Ainda não há obras liberadas para você.');
-  const painelObras = criarPainel({
-    titulo: 'Minhas obras', icone: 'painel',
-    conteudo: obras.length ? h('div', { class: 'kz-apps kz-apps--obras' }, cartoes) : h('p', { class: 'ctc-text-muted' }, perfil.gestorGeral ? 'Nenhuma obra cadastrada.' : 'Nenhuma obra liberada para você. Fale com o gestor da obra.'),
-  }).elemento;
+  const listaObras = obras.length
+    ? h('div', { class: 'kz-obras' }, obras.map(cartaoObra))
+    : h('div', { class: 'kz-vazio' }, perfil.gestorGeral ? 'Nenhuma obra cadastrada.' : 'Nenhuma obra liberada para você. Fale com o gestor da obra.');
+  const titulo = obras.length > 1 ? h('h2', { class: 'kz-secao' }, `${obras.length} obras`) : null;
+
   // Quem nao e gestor ve so a lista de obras.
-  if (!souGestor()) return [faixa, painelObras];
+  if (!souGestor()) return [faixa, titulo, listaObras];
 
   return [
     faixa,
-    h('div', { class: 'ctc-grid ctc-grid--3' },
-      criarKpi({ rotulo: 'Obras com acesso', valor: obras.length, formato: 'numero', tamanho: 'lg' }).elemento,
-      criarKpi({ rotulo: 'Obras ativas', valor: ativas, formato: 'numero', variante: 'success' }).elemento,
-      criarKpi({ rotulo: 'Seu perfil', valor: perfil.gestorGeral ? 'Gestor geral' : (obras.some((o) => o.membro.gestor) ? 'Gestor de obra' : 'Usuário'), variante: 'accent' }).elemento),
     obras.length || !perfil.gestorGeral ? null : criarAlerta({
       tipo: 'info',
       titulo: 'Nenhuma obra cadastrada',
       mensagem: 'Crie a primeira obra em Gestão geral > Obras.',
       acoes: perfil.gestorGeral ? [{ texto: 'Ir para Obras', onClick: () => app.navegar('obras') }] : [],
     }),
-    painelObras,
+    titulo,
+    listaObras,
   ];
 }
 

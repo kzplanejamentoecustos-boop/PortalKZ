@@ -81,6 +81,85 @@
 .kz-apps:not(.kz-apps--obras) .kz-app__nome { font-weight: 500; font-size: .85rem; }
 .kz-apps:not(.kz-apps--obras) .kz-app__icone { width: 76px; height: 76px; border-radius: 22px; }
 
+/* ---------- Minhas obras ---------- */
+.kz-boas-vindas--grande {
+  position: relative; overflow: hidden; padding: 28px 32px; border-radius: 20px;
+  background: radial-gradient(circle at 85% -20%, rgba(255,255,255,.18) 0, transparent 45%),
+              linear-gradient(135deg, var(--ctc-brand-950), var(--ctc-brand-800) 55%, var(--ctc-brand-600));
+}
+.kz-boas-vindas--grande .kz-boas-vindas__titulo { font-size: 1.6rem; }
+.kz-numeros { margin-left: auto; display: flex; gap: 10px; flex-wrap: wrap; }
+.kz-numero {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  min-width: 92px; padding: 10px 16px; border-radius: 14px;
+  background: rgba(255,255,255,.12); border: 1px solid rgba(255,255,255,.18);
+  font-size: .75rem; opacity: .95; text-transform: lowercase;
+}
+.kz-numero strong { font-size: 1.5rem; line-height: 1.1; text-transform: none; }
+.kz-numero--texto strong { font-size: 1rem; padding: 4px 0 2px; }
+
+.kz-secao { margin: 8px 2px 0; font-size: 1.05rem; font-weight: 700; color: var(--ctc-color-text-strong); }
+.kz-vazio {
+  padding: 40px; text-align: center; border-radius: 16px;
+  border: 2px dashed var(--ctc-color-border-strong); color: var(--ctc-color-text-muted);
+}
+
+.kz-obras { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; }
+.kz-obra {
+  display: flex; flex-direction: column; overflow: hidden; padding: 0;
+  border: 1px solid var(--ctc-color-border); border-radius: 20px;
+  background: var(--ctc-color-surface); color: var(--ctc-color-text);
+  font: inherit; text-align: left; cursor: pointer;
+  box-shadow: 0 2px 6px rgba(15, 23, 42, .05);
+  transition: transform .18s ease, box-shadow .18s ease;
+}
+.kz-obra:hover { transform: translateY(-4px); box-shadow: 0 16px 32px rgba(15, 23, 42, .14); }
+.kz-obra:active { transform: translateY(-1px) scale(.99); }
+.kz-obra:focus-visible { outline: 3px solid var(--ctc-color-focus); outline-offset: 2px; }
+
+.kz-obra__capa {
+  position: relative; display: flex; align-items: flex-end; justify-content: space-between;
+  height: 112px; padding: 16px 18px; color: var(--ctc-white);
+  background:
+    radial-gradient(circle at 90% 10%, rgba(255,255,255,.25) 0, transparent 40%),
+    radial-gradient(circle at 10% 120%, rgba(255,255,255,.15) 0, transparent 45%),
+    linear-gradient(135deg, var(--kz-cor-clara), var(--kz-cor));
+}
+.kz-obra__sigla { font-size: 2rem; font-weight: 800; letter-spacing: 1px; text-shadow: 0 2px 8px rgba(0,0,0,.2); }
+.kz-obra__etiquetas { position: absolute; top: 12px; right: 12px; display: flex; gap: 6px; }
+.kz-obra__etiqueta {
+  font-size: .7rem; font-weight: 700; padding: 3px 9px; border-radius: 999px;
+  background: rgba(255,255,255,.22); color: var(--ctc-white); backdrop-filter: blur(4px);
+}
+.kz-obra__etiqueta--ativa { background: var(--ctc-white); color: var(--ctc-success-strong); }
+
+.kz-obra__corpo { display: flex; flex-direction: column; gap: 6px; padding: 16px 18px 14px; }
+.kz-obra__nome { font-size: 1.1rem; font-weight: 700; color: var(--ctc-color-text-strong); }
+.kz-obra__info { font-size: .82rem; color: var(--ctc-color-text-muted); }
+
+.kz-obra__mini { display: flex; align-items: center; gap: 6px; margin: 8px 0 4px; }
+.kz-obra__mini .kz-app__icone { width: 36px; height: 36px; border-radius: 11px; box-shadow: none; }
+.kz-obra__mini .kz-app__icone svg { width: 19px; height: 19px; }
+.kz-obra__mais {
+  display: grid; place-items: center; width: 36px; height: 36px; border-radius: 11px;
+  background: var(--ctc-color-surface-alt); border: 1px solid var(--ctc-color-border);
+  font-size: .78rem; font-weight: 700; color: var(--ctc-color-text-muted);
+}
+.kz-obra__rodape {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-top: 6px; padding-top: 12px; border-top: 1px solid var(--ctc-color-border);
+  font-size: .82rem; color: var(--ctc-color-text-muted);
+}
+.kz-obra__entrar { font-weight: 700; color: var(--kz-cor); transition: transform .18s ease; }
+.kz-obra:hover .kz-obra__entrar { transform: translateX(4px); }
+
+@media (max-width: 600px) {
+  .kz-boas-vindas--grande { padding: 22px 20px; }
+  .kz-numeros { margin-left: 0; width: 100%; }
+  .kz-numero { flex: 1; min-width: 0; padding: 8px; }
+  .kz-obras { grid-template-columns: 1fr; }
+}
+
 @media (max-width: 600px) {
   .kz-apps { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 12px; }
   .kz-app__icone { width: 60px; height: 60px; border-radius: 16px; }
