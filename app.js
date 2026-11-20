@@ -71,6 +71,7 @@ const CONTROLES_BASICOS = {
   organograma: { nome: 'Organograma', url: `${ENDERECO}organograma/` },
   'relatorio-fotografico': { nome: 'Relatório Fotográfico', url: `${ENDERECO}RelatorioFotografico/` },
   'relatorio-bexup': { nome: 'Relatório BEXUP', url: `${ENDERECO}RELATORIOBEXUP/` },
+  rdo: { nome: 'RDO — Relatório Diário de Obra', url: `${ENDERECO}rdo/` },
 };
 
 /**
@@ -176,7 +177,8 @@ function selecionarObra(obra, pagina = 'controles') {
 }
 
 function listaControles(obra) {
-  return ordenar(Object.entries((obra && obra.controles) || {}).map(([id, c]) => ({ id, ...c })), 'nome');
+  // Um controle que entrou depois na lista de basicos (ex.: rdo) conta como basico tambem nas obras antigas.
+  return ordenar(Object.entries((obra && obra.controles) || {}).map(([id, c]) => ({ id, ...c, basico: Boolean(c.basico || CONTROLES_BASICOS[id]) })), 'nome');
 }
 
 function badgePapel(papel) {
@@ -798,7 +800,7 @@ function abrirControleProprio(obra, existente = null) {
         formulario.definirErro('nome', 'Já existe um controle com esse nome nesta obra.');
         return;
       }
-      controles[id] = { nome, url, basico: false };
+      controles[id] = { ...(existente ? controles[id] || {} : {}), nome, url, basico: false };
       modal.fechar();
       await gravarControles(obra, controles, existente ? 'Controle atualizado' : 'Controle cadastrado');
     },
@@ -808,6 +810,70 @@ function abrirControleProprio(obra, existente = null) {
     destruirAoFechar: true,
     conteudo: [
       criarAlerta({ tipo: 'info', mensagem: 'O controle próprio é um aplicativo feito no padrão KZ e publicado no GitHub. Aqui você só cadastra o nome e o link.' }),
+      formulario.elemento,
+    ],
+    acoes: [
+      { texto: 'Cancelar', variante: 'outline' },
+      { texto: 'Salvar', variante: 'primary', fechar: false, onClick: () => formulario.enviar() },
+    ],
+  });
+  modal.abrir();
+}
+
+/** O controle e o RDO quando o link aponta para .../rdo/ (mesma regra usada pelo app RDO). */
+const ehControleRdo = (c) => /\/rdo(\/|$|[?#.-])/i.test(String((c && c.url) || ''));
+
+const LADOS_APROVACAO = [
+  { lado: 'contratada', rotulo: '1ª aprovação — Contratada' },
+  { lado: 'contratante', rotulo: '2ª aprovação — Contratante' },
+];
+
+/** Gestor define os e-mails dos 2 aprovadores do RDO: obra.controles[id].aprovadores. */
+async function abrirAprovadoresRdo(obra, controle) {
+  let membros = [];
+  try { membros = ordenar(await listarMembros(obra.id), 'nome'); } catch (erro) { toast.erro('Não foi possível ler a equipe', erro.message); }
+  const atuais = controle.aprovadores || {};
+  const daEquipe = (email) => membros.some((m) => String(m.email || '').toLowerCase() === email);
+  const opcoes = membros.filter((m) => m.email).map((m) => ({ valor: String(m.email).toLowerCase(), texto: `${m.nome || m.email} · ${m.email}` }));
+  const valores = {};
+  LADOS_APROVACAO.forEach(({ lado }) => {
+    const email = String(atuais[lado] || '').toLowerCase();
+    valores[`equipe_${lado}`] = daEquipe(email) ? email : '';
+    valores[`outro_${lado}`] = email && !daEquipe(email) ? email : '';
+  });
+  const formulario = criarFormulario({
+    colunas: 1,
+    semBotoes: true,
+    valores,
+    campos: LADOS_APROVACAO.flatMap(({ lado, rotulo }) => [
+      { nome: `equipe_${lado}`, rotulo, tipo: 'select', placeholder: '— escolha na equipe da obra —', opcoes },
+      { nome: `outro_${lado}`, rotulo: 'ou digite outro e-mail', tipo: 'email', placeholder: 'nome@empresa.com.br' },
+    ]),
+    onEnviar: async (v) => {
+      const aprovadores = {};
+      for (const { lado } of LADOS_APROVACAO) {
+        aprovadores[lado] = String(v[`outro_${lado}`] || v[`equipe_${lado}`] || '').trim().toLowerCase();
+      }
+      if (aprovadores.contratada && aprovadores.contratada === aprovadores.contratante) {
+        formulario.definirErro('outro_contratante', 'Use pessoas diferentes para a 1ª e a 2ª aprovação.');
+        return;
+      }
+      const controles = { ...(obra.controles || {}) };
+      controles[controle.id] = { ...(controles[controle.id] || {}), aprovadores };
+      modal.fechar();
+      await gravarControles(obra, controles, 'Aprovadores do RDO salvos');
+      const semAcesso = LADOS_APROVACAO.map(({ lado }) => aprovadores[lado]).filter(Boolean).filter((email) => {
+        const m = membros.find((x) => String(x.email || '').toLowerCase() === email);
+        return !m || !['editor', 'admin'].includes(papelNoControle(m, controle.id));
+      });
+      if (semAcesso.length) toast.aviso('Confira a equipe', `${semAcesso.join(' e ')} precisa(m) estar na equipe da obra com papel Editor ou Admin no RDO para conseguir aprovar.`);
+    },
+  });
+  const modal = criarModal({
+    titulo: `Aprovadores do RDO — ${obra.sigla}`,
+    destruirAoFechar: true,
+    conteudo: [
+      criarAlerta({ tipo: 'info', mensagem: 'Só estas pessoas conseguem aprovar os relatórios desta obra: primeiro a contratada, depois o contratante. Elas precisam estar na equipe com papel Editor ou Admin no RDO. Se preencher "outro e-mail", ele vale no lugar da escolha da lista.' }),
       formulario.elemento,
     ],
     acoes: [
@@ -832,8 +898,16 @@ function paginaConfigControles() {
       { campo: 'basico', titulo: 'Tipo', render: (v) => (v ? criarBadge({ texto: 'Básico', variante: 'info' }) : criarBadge({ texto: 'Próprio da obra', variante: 'warning' })) },
       { campo: 'id', titulo: 'Código', classe: 'ctc-mono' },
       {
+        campo: 'aprovadores', titulo: 'Aprovadores', ordenavel: false,
+        render: (v, c) => (ehControleRdo(c)
+          ? h('div', { class: 'ctc-text-sm' },
+            LADOS_APROVACAO.map(({ lado }, i) => h('div', {}, `${i + 1}ª ${(v || {})[lado] || '— não definido'}`)))
+          : '—'),
+      },
+      {
         campo: 'acoes', titulo: '', ordenavel: false, classe: 'ctc-col--actions',
         render: (_, c) => h('div', { class: 'ctc-btn-group' },
+          ehControleRdo(c) ? criarBotao({ texto: 'Aprovadores', icone: 'usuario', variante: 'outline', tamanho: 'sm', titulo: 'Definir quem aprova o RDO', onClick: () => abrirAprovadoresRdo(obra, c) }) : null,
           c.basico ? null : criarBotao({ icone: 'editar', variante: 'ghost', tamanho: 'sm', titulo: `Editar ${c.nome}`, onClick: () => abrirControleProprio(obra, c) }),
           criarBotao({
             icone: 'lixeira', variante: 'ghost', tamanho: 'sm', titulo: `Desativar ${c.nome}`,
