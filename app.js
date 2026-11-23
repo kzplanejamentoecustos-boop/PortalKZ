@@ -177,8 +177,11 @@ function selecionarObra(obra, pagina = 'controles') {
 }
 
 function listaControles(obra) {
-  // Um controle que entrou depois na lista de basicos (ex.: rdo) conta como basico tambem nas obras antigas.
-  return ordenar(Object.entries((obra && obra.controles) || {}).map(([id, c]) => ({ id, ...c, basico: Boolean(c.basico || CONTROLES_BASICOS[id]) })), 'nome');
+  // Um controle que entrou depois na lista de basicos (ex.: rdo) conta como basico tambem nas obras antigas,
+  // a menos que o gestor tenha escolhido o tipo na edicao (tipoEscolhido).
+  return ordenar(Object.entries((obra && obra.controles) || {}).map(([id, c]) => ({
+    id, ...c, basico: c.tipoEscolhido ? Boolean(c.basico) : Boolean(c.basico || CONTROLES_BASICOS[id]),
+  })), 'nome');
 }
 
 function badgePapel(papel) {
@@ -788,28 +791,35 @@ function abrirControleProprio(obra, existente = null) {
   const formulario = criarFormulario({
     colunas: 1,
     semBotoes: true,
-    valores: existente ? { nome: existente.nome, url: existente.url } : {},
+    valores: existente
+      ? { nome: existente.nome, url: existente.url, tipo: existente.basico ? 'basico' : 'proprio' }
+      : { tipo: 'proprio' },
     campos: [
       { nome: 'nome', rotulo: 'Nome do controle', obrigatorio: true, regras: { minCaracteres: 3, maxCaracteres: 60 } },
       { nome: 'url', rotulo: 'Link do aplicativo', obrigatorio: true, placeholder: 'https://kzplanejamentoecustos-boop.github.io/...', regras: { validar: validarLink } },
+      {
+        nome: 'tipo', rotulo: 'Tipo', tipo: 'select', obrigatorio: true,
+        opcoes: [{ valor: 'proprio', texto: 'Próprio da obra' }, { valor: 'basico', texto: 'Básico' }],
+        dica: 'Próprio da obra: feito só para esta obra. Básico: controle padrão, usado em todas as obras.',
+      },
     ],
-    onEnviar: async ({ nome, url }) => {
+    onEnviar: async ({ nome, url, tipo }) => {
       const id = existente ? existente.id : codigoObra(nome);
       const controles = { ...(obra.controles || {}) };
       if (!existente && (controles[id] || CONTROLES_BASICOS[id] || id === 'membros')) {
         formulario.definirErro('nome', 'Já existe um controle com esse nome nesta obra.');
         return;
       }
-      controles[id] = { ...(existente ? controles[id] || {} : {}), nome, url, basico: false };
+      controles[id] = { ...(existente ? controles[id] || {} : {}), nome, url, basico: tipo === 'basico', tipoEscolhido: true };
       modal.fechar();
       await gravarControles(obra, controles, existente ? 'Controle atualizado' : 'Controle cadastrado');
     },
   });
   const modal = criarModal({
-    titulo: existente ? `Editar ${existente.nome}` : 'Cadastrar controle próprio da obra',
+    titulo: existente ? `Editar ${existente.nome}` : 'Cadastrar controle da obra',
     destruirAoFechar: true,
     conteudo: [
-      criarAlerta({ tipo: 'info', mensagem: 'O controle próprio é um aplicativo feito no padrão KZ e publicado no GitHub. Aqui você só cadastra o nome e o link.' }),
+      criarAlerta({ tipo: 'info', mensagem: 'O controle é um aplicativo feito no padrão KZ e publicado no GitHub. Aqui você cadastra o nome, o link e o tipo (próprio da obra ou básico).' }),
       formulario.elemento,
     ],
     acoes: [
@@ -908,7 +918,7 @@ function paginaConfigControles() {
         campo: 'acoes', titulo: '', ordenavel: false, classe: 'ctc-col--actions',
         render: (_, c) => h('div', { class: 'ctc-btn-group' },
           ehControleRdo(c) ? criarBotao({ texto: 'Aprovadores', icone: 'usuario', variante: 'outline', tamanho: 'sm', titulo: 'Definir quem aprova o RDO', onClick: () => abrirAprovadoresRdo(obra, c) }) : null,
-          c.basico ? null : criarBotao({ icone: 'editar', variante: 'ghost', tamanho: 'sm', titulo: `Editar ${c.nome}`, onClick: () => abrirControleProprio(obra, c) }),
+          criarBotao({ icone: 'editar', variante: 'ghost', tamanho: 'sm', titulo: `Editar ${c.nome}`, onClick: () => abrirControleProprio(obra, c) }),
           criarBotao({
             icone: 'lixeira', variante: 'ghost', tamanho: 'sm', titulo: `Desativar ${c.nome}`,
             onClick: async () => {
@@ -1252,7 +1262,7 @@ function montarPortal(paginaInicial = 'inicio') {
       titulo: 'Controles da obra', caminho: caminhoObra, render: paginaConfigControles,
       acoes: gestorObra ? [
         { texto: 'Ativar controles básicos', icone: 'check', variante: 'outline', onClick: () => abrirAtivarBasicos(obra) },
-        { texto: 'Cadastrar controle próprio', icone: 'mais', variante: 'primary', onClick: () => abrirControleProprio(obra) },
+        { texto: 'Cadastrar controle', icone: 'mais', variante: 'primary', onClick: () => abrirControleProprio(obra) },
       ] : [],
     },
     obras: {
