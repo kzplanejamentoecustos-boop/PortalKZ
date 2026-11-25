@@ -72,6 +72,7 @@ const CONTROLES_BASICOS = {
   'relatorio-fotografico': { nome: 'Relatório Fotográfico', url: `${ENDERECO}RelatorioFotografico/` },
   'relatorio-bexup': { nome: 'Relatório BEXUP', url: `${ENDERECO}RELATORIOBEXUP/` },
   rdo: { nome: 'RDO — Relatório Diário de Obra', url: `${ENDERECO}rdo/` },
+  combustivel: { nome: 'Controle de Combustível', url: `${ENDERECO}controle-de-combustivel/` },
 };
 
 /**
